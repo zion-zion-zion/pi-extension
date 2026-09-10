@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "enabled": true,
+  "preset": "default",
+  "separator": "dot",
+  "separatorFg": "default",
+  "separatorBg": "default",
+  "iconMode": "emoji",
+  "minimalist": false,
+  "terminal": {
+    "widthMode": "full",
+    "colorLevel": "ansi256"
+  },
+  "extensionStatusRow": {
+    "hiddenKeys": [],
+    "knownKeys": []
+  },
+  "lines": [
+    [
+      {
+        "id": "model-provider-1",
+        "type": "model-provider",
+        "enabled": true,
+        "options": {}
+      },
+      {
+        "id": "thinking-level-1",
+        "type": "thinking-level",
+        "enabled": true,
+        "options": {
+          "hideWhenEmpty": true
+        }
+      },
+      {
+        "id": "tokens-1",
+        "type": "tokens",
+        "enabled": true,
+        "options": {}
+      },
+      {
+        "id": "cache-read-1",
+        "type": "cache-read",
+        "enabled": true,
+        "options": {
+          "hideWhenZero": true
+        }
+      },
+      {
+        "id": "cache-write-1",
+        "type": "cache-write",
+        "enabled": true,
+        "options": {
+          "hideWhenZero": true
+        }
+      },
+      {
+        "id": "cache-hit-rate-1",
+        "type": "cache-hit-rate",
+        "enabled": true,
+        "options": {
+          "hideWhenZero": true,
+          "cacheHitSource": "turn"
+        }
+      },
+      {
+        "id": "cost-1",
+        "type": "cost",
+        "enabled": true,
+        "options": {}
+      },
+      {
+        "id": "context-bar-1",
+        "type": "context-bar",
+        "enabled": true,
+        "options": {
+          "contextBarMode": "short",
+          "contextConditionalColors": true
+        }
+      },
+      {
+        "id": "context-1",
+        "type": "context",
+        "enabled": true,
+        "options": {
+          "contextConditionalColors": true
+        }
+      }
+    ],
+    [
+      {
+        "id": "git-branch-1",
+        "type": "git-branch",
+        "enabled": true,
+        "options": {
+          "hideWhenEmpty": true
+        }
+      },
+      {
+        "id": "git-sha-1",
+        "type": "git-sha",
+        "enabled": true,
+        "options": {
+          "hideWhenEmpty": true
+        }
+      },
+      {
+        "id": "git-status-1",
+        "type": "git-status",
+        "enabled": true,
+        "options": {
+          "hideWhenEmpty": true
+        }
+      },
+      {
+        "id": "git-diff-1",
+        "type": "git-diff",
+        "enabled": true,
+        "options": {
+          "gitDiffMode": "compact",
+          "hideWhenEmpty": true
+        }
+      },
+      {
+        "id": "git-ahead-behind-1",
+        "type": "git-ahead-behind",
+        "enabled": true,
+        "options": {
+          "hideWhenEmpty": true
+        }
+      },
+      {
+        "id": "total-time-1",
+        "type": "total-time",
+        "enabled": true,
+        "options": {}
+      },
+      {
+        "id": "event-token-speed-1",
+        "type": "event",
+        "enabled": true,
+        "options": {
+          "widgetId": "token_speed",
+          "icon": "⚡",
+          "hideWhenEmpty": true,
+          "fg": "brightCyan"
+        }
+      }
+    ]
+  ]
+}

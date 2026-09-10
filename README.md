@@ -10,8 +10,16 @@
 | [`extensions/checkpoint.ts`](extensions/checkpoint.ts) | `/checkpoint` — 自动生成提交信息并提交当前 git 改动（绝不 push） |
 | [`extensions/token-speed.ts`](extensions/token-speed.ts) | 显示上一条回答的 token 生成速度（tok/s），通过 pi-footer 的 widget 展示；`/speed` 查看详细统计 |
 | [`extensions/startup-sync.ts`](extensions/startup-sync.ts) | 启动时自动同步 pi 配置仓库（双向提交 + fetch/rebase + push）。⚠️ 与本机备份脚本 `scripts/backup.sh` 强耦合，属于个人环境专用 |
+| [`extensions/steer-or-interrupt.ts`](extensions/steer-or-interrupt.ts) | Opt+Enter：没有进行中的 tool 时立刻中断当前回答并发送；有挂起的 tool 时走内置 steering |
+| [`extensions/codex-usage/`](extensions/codex-usage/) | `/status` 查看 ChatGPT Codex 的 5 小时 / 周额度，底部状态栏常驻摘要；复用 pi 管理的 `openai-codex` OAuth |
 | [`extensions/pi-footer.json`](extensions/pi-footer.json) | pi 底部状态栏（footer）配置：布局、图标、widget 等 |
 | [`extensions/pi-context-view.json`](extensions/pi-context-view.json) | 「Context View」颜色主题配置（各消息类型的颜色） |
+
+## Skills
+
+| 文件 | 功能 |
+|------|------|
+| [`skills/read-terminal/`](skills/read-terminal/) | 按需读取 Herdr 里另一个命名终端 pane 的屏幕 / scrollback。只在 Herdr 环境下生效，纯读取，不会向对方 pane 写入 |
 
 ## 安装
 
@@ -30,9 +38,25 @@ git clone https://github.com/zion-zion-zion/pi-extension.git
 ln -s "$PWD/pi-extension/extensions" ~/.pi/agent/extensions-local
 ```
 
-> 放置路径：全局 `~/.pi/agent/extensions/`，项目级 `.pi/extensions/`（需先信任项目）。快速测试可用 `pi -e ./xxx.ts`。
+`codex-usage` 是目录型扩展，需要把整个目录放到扩展路径下：
+
+```bash
+cp -R extensions/codex-usage ~/.pi/agent/extensions/
+# 或软链接
+ln -s "$PWD/pi-extension/extensions/codex-usage" ~/.pi/agent/extensions/codex-usage
+```
+
+Skill 放到全局 skill 目录即可被 pi 发现：
+
+```bash
+cp -R skills/read-terminal ~/.agents/skills/
+# 或软链接
+ln -s "$PWD/pi-extension/skills/read-terminal" ~/.agents/skills/read-terminal
+```
+
+> 放置路径：全局 `~/.pi/agent/extensions/`，项目级 `.pi/extensions/`（需先信任项目）。快速测试可用 `pi -e ./xxx.ts`。Skill 路径：全局 `~/.agents/skills/` 或 `~/.pi/agent/skills/`。
 >
-> 安全提示：扩展以你的完整权限运行，只从可信来源安装。
+> 安全提示：扩展和 skill 都以你的完整权限运行，只从可信来源安装。
 
 ## 依赖
 

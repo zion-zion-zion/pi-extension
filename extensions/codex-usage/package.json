@@ -1,0 +1,11 @@
+{
+  "name": "codex-usage",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test ./*.test.ts"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

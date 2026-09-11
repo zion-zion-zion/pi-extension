@@ -12,6 +12,7 @@
 | [`extensions/startup-sync.ts`](extensions/startup-sync.ts) | 启动时自动同步 pi 配置仓库（双向提交 + fetch/rebase + push）。⚠️ 与本机备份脚本 `scripts/backup.sh` 强耦合，属于个人环境专用 |
 | [`extensions/steer-or-interrupt.ts`](extensions/steer-or-interrupt.ts) | Opt+Enter：没有进行中的 tool 时立刻中断当前回答并发送；有挂起的 tool 时走内置 steering |
 | [`extensions/codex-usage/`](extensions/codex-usage/) | `/status` 查看 ChatGPT Codex 的 5 小时 / 周额度，底部状态栏常驻摘要；复用 pi 管理的 `openai-codex` OAuth |
+| [`extensions/model-filter.ts`](extensions/model-filter.ts) | 隐藏内置 provider 里用不到的历史模型（默认过滤 `openai-codex` 的 gpt-5.3~5.5），在 `/model` 与 `--list-models` 生效 |
 | [`extensions/pi-footer.json`](extensions/pi-footer.json) | pi 底部状态栏（footer）配置：布局、图标、widget 等 |
 | [`extensions/pi-context-view.json`](extensions/pi-context-view.json) | 「Context View」颜色主题配置（各消息类型的颜色） |
 

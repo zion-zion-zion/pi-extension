@@ -5,14 +5,15 @@
  *
  * 1. Run git status
  * 2. If the worktree is dirty, stage and commit
- * 3. Commit message summarizes the current diff (current session model, with a local fallback)
+ * 3. Commit message summarizes the current diff in Simplified Chinese
+ *    (current session model, with a local Chinese fallback)
  */
 
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 const DIFF_CHAR_LIMIT = 24_000;
-const SUBJECT_LIMIT = 72;
+const SUBJECT_LIMIT = 50;
 
 type GitResult = {
 	stdout: string;
@@ -45,10 +46,10 @@ function fallbackMessage(porcelain: string): string {
 		.map((line) => line.slice(3).trim())
 		.filter(Boolean);
 
-	if (files.length === 0) return "Save local work";
-	if (files.length === 1) return `Update ${files[0]}`;
-	if (files.length === 2) return `Update ${files[0]} and ${files[1]}`;
-	return `Update ${files[0]}, ${files[1]}, and ${files.length - 2} other file${files.length - 2 === 1 ? "" : "s"}`;
+	if (files.length === 0) return "保存本地改动";
+	if (files.length === 1) return `更新 ${files[0]}`;
+	if (files.length === 2) return `更新 ${files[0]} 和 ${files[1]}`;
+	return `更新 ${files[0]}、${files[1]} 等 ${files.length} 个文件`;
 }
 
 function sanitizeMessage(raw: string): string | undefined {
@@ -61,10 +62,11 @@ function sanitizeMessage(raw: string): string | undefined {
 
 	const lines = text.split(/\r?\n/);
 	let subject = (lines[0] ?? "").trim();
-	if (subject.toLowerCase().startsWith("subject:")) {
-		subject = subject.slice("subject:".length).trim();
+	subject = subject.replace(/^[*#>`\s]+/u, "").replace(/[*_`\s]+$/u, "").trim();
+	const subjectPrefix = /^(?:subject|标题)[:：]\s*/iu.exec(subject);
+	if (subjectPrefix) {
+		subject = subject.slice(subjectPrefix[0].length).trim();
 	}
-	subject = subject.replace(/^\*\s+/, "").replace(/^#{1,6}\s+/, "");
 	if (subject.length > SUBJECT_LIMIT) {
 		subject = `${subject.slice(0, SUBJECT_LIMIT - 1).trimEnd()}…`;
 	}
@@ -73,7 +75,7 @@ function sanitizeMessage(raw: string): string | undefined {
 		.slice(1)
 		.join("\n")
 		.trim()
-		.replace(/^(?:body|message):\s*/i, "")
+		.replace(/^(?:body|message|正文)[:：]\s*/iu, "")
 		.trim();
 
 	if (!subject) return undefined;
@@ -91,9 +93,11 @@ async function generateMessage(
 
 	const prompt = [
 		"Write a git commit message for the changes below.",
+		"Write it in Simplified Chinese (简体中文). Never use English words when a natural Chinese term exists;",
+		"keep file paths, identifiers, and API names as-is.",
 		"Output only the commit message.",
-		"First line: imperative subject, max 72 characters, no trailing period.",
-		"Optional body after a blank line, concise, wrap-friendly.",
+		"First line: 中文祈使句标题，不超过 50 个字符，结尾不加句号。",
+		"Optional body after a blank line, concise, wrap-friendly, also in Chinese.",
 		"No markdown fences, no quotes, no commentary, no Co-authored-by trailer.",
 		"",
 		"<git-status>",

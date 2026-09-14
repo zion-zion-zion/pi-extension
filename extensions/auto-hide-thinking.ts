@@ -36,9 +36,11 @@ const SETTINGS_PATH = join(getAgentDir(), "settings.json");
 const TRACE_PATH = join(getAgentDir(), "auto-hide-thinking.log");
 const TRACE_MAX_BYTES = 128 * 1024;
 const SEND_TIMEOUT_MS = 2_000;
-const WAIT_FOR_FILE_MS = 1_500;
-const UNKNOWN_FILE_MS = 1_500;
-/** 等本 pane 实例被捕获的宽限期，超时才退回全局 settings.json。 */
+/** 注入 Ctrl+T 后，等本 pane 字段变成目标值的窗口。 */
+const WAIT_FOR_TOGGLE_MS = 1_500;
+/** 始终捕获不到本 pane 实例时的放弃窗口（等实例，不猜）。 */
+const UNKNOWN_STATE_MS = 1_500;
+/** 等本 pane 实例被捕获的宽限期；超时不猜（以前是退回读共享的 settings.json）。 */
 const MODE_WAIT_MS = 600;
 const POLL_MS = 25;
 const MUTE_MS = 1_500;
@@ -147,7 +149,12 @@ function trace(message: string): void {
 	}
 }
 
-/** 读不到或 JSON 坏了时返回 undefined，避免把半写入当成 false。 */
+/**
+ * 读共享的全局 settings.json。读不到或 JSON 坏了时返回 undefined，避免把半写入当成 false。
+ *
+ * 注意：判定不读它 —— 它被所有 pane 共享，别的窗口一按键它就变。现在只用于诊断对照
+ * （describeSources），用来看「本 pane 字段」与「共享文件」是否一致。
+ */
 function readHideThinkingBlock(): boolean | undefined {
 	try {
 		const parsed: unknown = JSON.parse(readFileSync(SETTINGS_PATH, "utf8"));
@@ -161,16 +168,14 @@ function readHideThinkingBlock(): boolean | undefined {
 }
 
 /**
- * 本 pane 自己的 thinking 可见性。
+ * 本 pane 自己的 thinking 可见性；实例还没被 handleEvent 捕获时返回 undefined。
  *
- * settings.json 是所有 pane 共享的全局文件：其它窗口一按键它就会变，所以它只能当
- * 兜底，不能拿来判定「本 pane 已经是目标值了」——否则别的窗口展开过，本 pane 就会
- * 误以为自己也展开了，直接跳过注入 Ctrl+T，thinking 永远不展开。
+ * 不退回读 settings.json：那个文件被所有 pane 共享，别的窗口一按键它就变，拿它当
+ * 「本 pane 的当前值」会得出错误的「已经是目标值」而跳过注入。
  */
 function readPaneHidden(state: PatchState): boolean | undefined {
 	const live = state.activeMode?.hideThinkingBlock;
-	if (typeof live === "boolean") return live;
-	return readHideThinkingBlock();
+	return typeof live === "boolean" ? live : undefined;
 }
 
 /**
@@ -195,11 +200,12 @@ async function resolvePaneHidden(
 ): Promise<boolean | undefined> {
 	const deadline = Date.now() + MODE_WAIT_MS;
 	for (;;) {
-		const live = state.activeMode?.hideThinkingBlock;
-		if (typeof live === "boolean") return live;
+		const live = readPaneHidden(state);
+		if (live !== undefined) return live;
 		if (Date.now() >= deadline) {
-			trace(`resolvePaneHidden 未在 ${MODE_WAIT_MS}ms 内捕获本 pane 实例，退回全局 settings.json`);
-			return readHideThinkingBlock();
+			// 不猜：宁可这一轮什么都不做，也不拿共享文件的值来下结论。
+			trace(`resolvePaneHidden 未在 ${MODE_WAIT_MS}ms 内捕获本 pane 实例，本轮不判定`);
+			return undefined;
 		}
 		try {
 			await sleep(POLL_MS, signal);
@@ -280,14 +286,17 @@ function installPatches(): PatchState | undefined {
 	state.activePump = undefined;
 	clearMute(state);
 
-	const configuredHidden = readPaneHidden(state);
-	// session.reload() 的顺序是 beforeSessionStart()（重画聊天区）→ session_start
-	// （这时才装补丁），所以聊天区刚被「还没补丁」的原生 render 画过一遍。这里必须走
-	// setProcessVisible 并带上 requestRender，否则屏幕上会一直留着展开的工具块，
-	// 直到下一次碰巧的渲染请求。
-	if (configuredHidden !== undefined) setProcessVisible(state, !configuredHidden, true);
+	// session_start 早于任何 handleEvent，所以这里通常还没拿到本 pane 实例。分两种情况：
+	//   抓到（reload 不换 TUI 实例，上一轮的 showStatus / toggle 包装器可能已存下引用）
+	//     → 用真实值并 requestRender：session.reload() 是先重画聊天区、后装补丁，
+	//       刚重建出来的工具块需要按真实状态再画一次才收得起来。
+	//   没抓到 → 就不猜，留 undefined，等第一条 session 事件经 handleEvent 捕获实例后
+	//     立即纠正并重画。绝不退回读共享的 settings.json。
+	const live = readPaneHidden(state);
+	if (live !== undefined) setProcessVisible(state, !live, true);
+	else state.processVisible = undefined;
 	trace(
-		`install configuredHidden=${configuredHidden} live=${state.activeMode ? "yes" : "no"} processVisible=${state.processVisible} ${describeSources(state)}`,
+		`install live=${live === undefined ? "no" : "yes"} processVisible=${state.processVisible} ${describeSources(state)}`,
 	);
 
 	if (!state.originalShowStatus && typeof proto.showStatus === "function") {
@@ -493,13 +502,13 @@ async function pump(pi: ExtensionAPI, state: PatchState, generation: number): Pr
 			const current = await resolvePaneHidden(state, controller.signal);
 			if (current === undefined) {
 				unknownSince ??= Date.now();
-				if (Date.now() - unknownSince > UNKNOWN_FILE_MS) {
+				if (Date.now() - unknownSince > UNKNOWN_STATE_MS) {
 					if (state.requestId === requestId && state.desiredHidden === target) {
 						state.desiredHidden = undefined;
 					}
 					unknownSince = undefined;
 					// Do not leave stale hidden/visible state in the render wrappers.
-					trace(`processVisible=undefined 连续 ${UNKNOWN_FILE_MS}ms 读不到 ${describeSources(state)}`);
+					trace(`processVisible=undefined 连续 ${UNKNOWN_STATE_MS}ms 捕获不到本 pane 实例 ${describeSources(state)}`);
 					state.processVisible = undefined;
 					continue;
 				}
@@ -538,7 +547,7 @@ async function pump(pi: ExtensionAPI, state: PatchState, generation: number): Pr
 				reachedTarget = await waitUntilHidden(
 					state,
 					target,
-					WAIT_FOR_FILE_MS,
+					WAIT_FOR_TOGGLE_MS,
 					controller.signal,
 				);
 			} catch {

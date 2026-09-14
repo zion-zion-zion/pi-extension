@@ -11,9 +11,17 @@
  *     前缀，纯文本回复的首行同样命中，会定位成回复开头而不是用户消息。
  * 所以这里自己标记 UserMessageComponent 渲染后的首行，从下往上精确命中最后一条用户消息。
  *
+ * 为什么行号不在 agent_settled 里直接算，而是挂在 doRender 之后算：
+ * auto-hide-thinking 会在同一轮 settle 里收起**整个** transcript 的 thinking 与工具块
+ * （不是只收起本轮），因此「用户消息的绝对行号」在收起前后完全不同 —— 收起前算出来的行号
+ * 一会儿就会被下一帧的内容长度变化冲掉（updateLayout 会把 scrollTop clamp 回底部）。
+ * pi 的 requestRender 是合并的，两个扩展的 settle 请求会落到同一帧，所以在 doRender 之后
+ * 用「刚画完的那一帧」重算行号，一次就能落对；内容若还在变（行数变了）就再补一次。
+ *
  * 不 import @earendil-works/pi-tui 的任何类：pi 的 TUI 被内联打包进 dist/bundle/chunks/，
  * 扩展解析到的是 node_modules 里另一份拷贝，patch 它的 prototype 对运行中的 pi 无效
- * （pi 自己就因此用 Symbol.for 做跨拷贝标识）。这里只做鸭子类型，layout 遍历自己写。
+ * （pi 自己就因此用 Symbol.for 做跨拷贝标识）。这里只做鸭子类型，钩子挂在运行时拿到的
+ * 真实渲染器 prototype 上。
  *
  * 状态都挂在 prototype 的 Symbol 上、跨 /reload 复用（同 auto-hide-thinking.ts）。
  */
@@ -39,6 +47,12 @@ const MODE_KEY = Symbol.for("pi-extension.scroll-to-last-prompt.interactive-mode
  * （教训见 auto-hide-thinking.ts：旧对象缺字段会让判定静默失效。）
  */
 const STATE_VERSION = 1;
+
+/** 落位重试窗口。要够长以覆盖「收起 thinking / 工具块」那一两帧，又要短到不会和用户抢视口。 */
+const PIN_WINDOW_MS = 1_200;
+const PIN_MAX_ATTEMPTS = 20;
+/** 行数与位置连续多少帧不变，才认为落位稳定。 */
+const PIN_STABLE_FRAMES = 2;
 
 type RenderFn = (this: unknown, width: number) => string[];
 type EventFn = (this: unknown, event: unknown) => unknown;
@@ -72,6 +86,8 @@ type TuiLike = {
 
 type InteractiveHost = {
 	ui?: TuiLike;
+	/** 真正承载视口的渲染器（TuiAltScreen），从它拿真实 prototype 挂 doRender 钩子。 */
+	renderer?: unknown;
 	transcriptScrollView?: ScrollViewLike;
 	handleEvent?: EventFn;
 };
@@ -87,6 +103,21 @@ type UserLinesState = {
 	wrapper?: RenderFn;
 };
 
+/** 一次等待落位的状态；由 doRender 后置钩子逐帧推进。 */
+type PendingPin = {
+	deadline: number;
+	attempts: number;
+	/** 是否已经执行过一次 scrollTo。用来区分「还没落位」与「用户接管」。 */
+	scrolled: boolean;
+	/** 最近一次想落位的行号；视口是否还停在这一行决定这次吸附算不算我们造成的。 */
+	lastRow: number;
+	/** 上一帧的内容行数：行数还在变说明 thinking / 工具块还在被收起。 */
+	lastTotal: number;
+	stableFrames: number;
+	scrollView?: ScrollViewLike;
+	tui?: TuiLike;
+};
+
 type ModeState = {
 	version: number;
 	enabled: boolean;
@@ -94,6 +125,13 @@ type ModeState = {
 	wrapper?: EventFn;
 	/** 本 pane 的 InteractiveMode。/reload 不换 TUI 实例，所以保留这个引用。 */
 	host?: InteractiveHost;
+	/** 与 UserLinesState 共用同一个 Set（安装时接过来）。 */
+	userLines?: Set<string>;
+	pending?: PendingPin;
+	/** 已挂 doRender 钩子的 prototype；渲染器被换掉时换一个挂。 */
+	hookedProto?: { doRender?: () => void };
+	originalDoRender?: () => void;
+	doRenderWrapper?: () => void;
 	/** 本扩展造成的「已脱离自动跟随」状态，用于下次发送消息时恢复。 */
 	pinned?: { scrollView: ScrollViewLike; tui: TuiLike };
 };
@@ -226,20 +264,55 @@ function uninstallModePatch(): void {
 	const state = readState<ModeState>(target, MODE_KEY);
 	if (!state) return;
 	state.enabled = false;
+	state.pending = undefined;
 	state.pinned = undefined;
 	if (state.wrapper && proto.handleEvent === state.wrapper) proto.handleEvent = state.original;
+	uninstallRenderHook(state);
 	// 保留 host / Symbol 上的 state：同一个 TUI 实例，reload 后还要靠它取 currentLayout。
 	// original/wrapper 也保留：proto.handleEvent === state.wrapper 这个判断就是「包装是否还在」的
 	// 唯一依据——正常卸载后原型已还原，下次安装会重新捕获当时的原型方法。
 	trace("卸载 InteractiveMode.handleEvent 包装");
 }
 
+function installRenderHook(state: ModeState): boolean {
+	const renderer = state.host?.renderer;
+	if (renderer === undefined || renderer === null) return false;
+	const proto = Object.getPrototypeOf(renderer) as { doRender?: () => void } | null;
+	if (!proto || typeof proto.doRender !== "function") {
+		trace("放弃：渲染器没有 doRender");
+		return false;
+	}
+	if (state.hookedProto === proto && proto.doRender === state.doRenderWrapper) return true;
+	const original = proto.doRender;
+	const wrapper = function (this: unknown): void {
+		original.call(this);
+		if (state.enabled && state.pending) onRenderFrame(state, this as TuiLike);
+	};
+	proto.doRender = wrapper;
+	state.hookedProto = proto;
+	state.originalDoRender = original;
+	state.doRenderWrapper = wrapper;
+	trace("安装渲染器 doRender 后置钩子");
+	return true;
+}
+
+function uninstallRenderHook(state: ModeState): void {
+	const proto = state.hookedProto;
+	if (proto && state.doRenderWrapper && proto.doRender === state.doRenderWrapper) {
+		proto.doRender = state.originalDoRender;
+	}
+	state.hookedProto = undefined;
+	state.originalDoRender = undefined;
+	state.doRenderWrapper = undefined;
+}
+
 /**
- * agent_settled 时调用。任何一步拿不到需要的东西都静默空操作，绝不打断 pi。
+ * agent_settled 时调用。只记下「想落位」的意图并逼一帧出来；行号交给 doRender 后置钩子算。
+ * 任何一步拿不到需要的东西都静默空操作，绝不打断 pi。
  */
-function pinToLastUserMessage(state: ModeState, firstLines: Set<string>): void {
+function requestPin(state: ModeState): void {
 	try {
-		if (!state.enabled) return;
+		if (!state.enabled || !state.userLines) return;
 		const host = state.host;
 		const tui = host?.ui;
 		if (!host || !tui) {
@@ -249,10 +322,9 @@ function pinToLastUserMessage(state: ModeState, firstLines: Set<string>): void {
 		// regular / print / rpc 下静默空操作：每轮都会走到这里，不刷日志。
 		if (tui.mode !== "fullscreen") return;
 
-		const frame = tui.currentLayout;
-		const scrollView = frame?.primaryScrollView ?? host.transcriptScrollView;
-		if (!frame?.root || !scrollView) {
-			trace("pin:skip 拿不到 fullscreen layout");
+		const scrollView = tui.currentLayout?.primaryScrollView ?? host.transcriptScrollView;
+		if (!scrollView) {
+			trace("pin:skip 拿不到 transcript ScrollView");
 			return;
 		}
 		// 方案 A：生成期间用户手动往上翻过，就尊重他的位置。
@@ -260,34 +332,129 @@ function pinToLastUserMessage(state: ModeState, firstLines: Set<string>): void {
 			trace("pin:skip 用户已手动上翻");
 			return;
 		}
+		if (!installRenderHook(state)) return;
 
-		const lines = findScrollBox(frame.root, scrollView)?.scrollContentLines;
-		if (!lines || lines.length === 0) {
-			trace("pin:skip 拿不到 scrollContentLines");
-			return;
-		}
-		const row = lastUserLineRow(lines, firstLines);
-		if (row < 0) {
-			trace(`pin:skip 未匹配到用户消息首行（已标记 ${firstLines.size} 条，共 ${lines.length} 行）`);
-			return;
-		}
-
-		scrollView.scrollTo(row);
+		state.pending = {
+			deadline: Date.now() + PIN_WINDOW_MS,
+			attempts: 0,
+			scrolled: false,
+			lastRow: -1,
+			lastTotal: -1,
+			stableFrames: 0,
+			scrollView,
+			tui,
+		};
+		// 逼一帧：pi 自己的重绘与 auto-hide-thinking 的收起会合并成同一帧，
+		// 所以钩子里第一次看到的 currentLayout 已经是收起后的内容。
 		tui.requestRender?.();
-		if (scrollView.isFollowingEnd === true) {
-			// 回复不足一屏，scrollTo 被 clamp 到内容末端：仍然跟随最新，不算吸附。
-			trace(`pin:clamped row=${row} 内容不足一屏，保持跟随`);
-			return;
-		}
-		state.pinned = { scrollView, tui };
-		trace(`pin:ok row=${row} scrollTop=${scrollView.scrollTop} 共 ${lines.length} 行`);
 	} catch (error) {
 		trace(`pin:threw ${String(error)}`);
 	}
 }
 
+/**
+ * 渲染器刚画完一帧后调用：用这一帧的内容重算行号并落位，直到位置稳定。
+ * 运行在 pi 的渲染循环里，任何异常都必须自己吞掉。
+ */
+function onRenderFrame(state: ModeState, tui: TuiLike): void {
+	const pin = state.pending;
+	if (!pin) return;
+	try {
+		pin.attempts += 1;
+		if (pin.attempts > PIN_MAX_ATTEMPTS || Date.now() > pin.deadline) {
+			finishPin(state, "give-up");
+			return;
+		}
+
+		const frame = tui.currentLayout;
+		const scrollView = frame?.primaryScrollView ?? pin.scrollView;
+		const lines =
+			frame?.root && scrollView
+				? findScrollBox(frame.root, scrollView)?.scrollContentLines
+				: undefined;
+		if (!scrollView || !lines || lines.length === 0) {
+			finishPin(state, "no-layout");
+			return;
+		}
+		pin.scrollView = scrollView;
+		pin.tui = tui;
+
+		const firstLines = state.userLines;
+		if (!firstLines) {
+			finishPin(state, "no-marks");
+			return;
+		}
+		const row = lastUserLineRow(lines, firstLines);
+		if (row < 0) {
+			finishPin(state, "no-match", `已标记 ${firstLines.size} 条，共 ${lines.length} 行`);
+			return;
+		}
+		const total = lines.length;
+
+		if (!pin.scrolled) {
+			if (scrollView.isFollowingEnd !== true) {
+				finishPin(state, "skip 用户已手动上翻");
+				return;
+			}
+			pin.scrolled = true;
+			pin.lastTotal = total;
+			pin.lastRow = row;
+			scrollView.scrollTo(row);
+			tui.requestRender?.();
+			trace(`pin:scroll row=${row} 共 ${total} 行`);
+			// 滚完不落在目标行：内容不足一屏，scrollTo 被 clamp 到末端了。
+			if (scrollView.scrollTop !== row) finishPin(state, "clamped", `row=${row} 共 ${total} 行`);
+			return;
+		}
+
+		if (total !== pin.lastTotal) {
+			// thinking / 工具块还在被收起：之前算的行号已经作废，按新内容重新落位。
+			pin.lastTotal = total;
+			pin.stableFrames = 0;
+			if (scrollView.scrollTop !== row) {
+				pin.lastRow = row;
+				scrollView.scrollTo(row);
+				tui.requestRender?.();
+				if (scrollView.scrollTop !== row) {
+					finishPin(state, "clamped", `row=${row} 共 ${total} 行`);
+					return;
+				}
+			}
+			trace(`pin:content-changed row=${row} 共 ${total} 行`);
+			return;
+		}
+
+		if (scrollView.scrollTop !== row) {
+			// 内容没变却不在位：是用户自己滚走了，让位。
+			finishPin(state, "skip 用户接管");
+			return;
+		}
+
+		pin.stableFrames += 1;
+		if (pin.stableFrames < PIN_STABLE_FRAMES) {
+			tui.requestRender?.();
+			return;
+		}
+		finishPin(state, "ok", `row=${row} 共 ${total} 行`);
+	} catch (error) {
+		finishPin(state, "threw", String(error));
+	}
+}
+
+function finishPin(state: ModeState, reason: string, detail?: string): void {
+	const pin = state.pending;
+	state.pending = undefined;
+	trace(`pin:${reason}${detail === undefined ? "" : ` ${detail}`}`);
+	if (!pin?.scrolled || !pin.scrollView || !pin.tui) return;
+	// 只有「视口还停在我们滚到的那一行」才算这次吸附是我们造成的：下次 input 时恢复跟随。
+	// 用户自己滚走（接管）过就不算，避免以后又把他拽回底部。
+	const ours = pin.scrollView.isFollowingEnd === false && pin.scrollView.scrollTop === pin.lastRow;
+	state.pinned = ours ? { scrollView: pin.scrollView, tui: pin.tui } : undefined;
+}
+
 /** 用户发送新消息时调用：把上一步吸附造成的「不跟随」恢复回来。 */
 function resumeFollowing(state: ModeState): void {
+	state.pending = undefined;
 	const pinned = state.pinned;
 	if (!pinned) return;
 	state.pinned = undefined;
@@ -310,6 +477,7 @@ export default function (pi: ExtensionAPI): void {
 		if (ctx.mode !== "tui") return false;
 		userLines ??= installUserLinesPatch();
 		modeState ??= installModePatch();
+		if (modeState && userLines) modeState.userLines = userLines.firstLines;
 		return Boolean(userLines && modeState);
 	};
 
@@ -320,8 +488,7 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("agent_settled", (_event, ctx) => {
 		if (!ensure(ctx)) return;
-		trace("agent_settled");
-		pinToLastUserMessage(modeState!, userLines!.firstLines);
+		requestPin(modeState!);
 	});
 
 	pi.on("input", (event, ctx) => {

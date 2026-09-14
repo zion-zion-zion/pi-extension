@@ -72,5 +72,5 @@ ln -s "$PWD/pi-extension/skills/read-terminal" ~/.agents/skills/read-terminal
 ## 说明
 
 - 目录里没有 `herdr-agent-state.ts`：该文件由 [herdr](https://github.com/ezra-herdr/herdr) 自动生成并管理，重装集成会被覆盖，不适合公开分发。
-- `auto-hide-thinking.ts` 只在 Herdr 的 TUI pane 里生效：读 `settings.json` 的 `hideThinkingBlock`，不一致时用 `herdr pane send-keys` 注入 `Ctrl+T`；thinking 隐藏时，Bash、Read、Edit 等工具块整体不渲染。`Ctrl+T` 会同时恢复 thinking 和工具块，`Ctrl+O` 仍只切换工具块内部的预览/完整输出。非 Herdr / print / RPC 模式直接空操作。
+- `auto-hide-thinking.ts` 只在 Herdr 的 TUI pane 里生效：拿**本 pane 自己的** `hideThinkingBlock` 当基准（`settings.json` 被所有 pane 共享，只能当兑底，不能用来判定“已经是目标值”），不一致时用 `herdr pane send-keys` 注入 `Ctrl+T`；thinking 隐藏时，Bash、Read、Edit 等工具块整体不渲染。`Ctrl+T` 会同时恢复 thinking 和工具块，`Ctrl+O` 仍只切换工具块内部的预览/完整输出。非 Herdr / print / RPC 模式直接空操作。
 - 这些插件来自我的个人配置，部分（如 `startup-sync.ts`）与我的本机环境耦合，仅供参考，按需裁剪。

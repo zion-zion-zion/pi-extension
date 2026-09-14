@@ -1,8 +1,11 @@
 /**
  * Herdr 下按 Ctrl+T 联动显示 / 隐藏思考过程和工具输出。
  *
- * 没有官方 setHideThinkingBlock API，只能读 settings.json 里的布尔值，
+ * 没有官方 setHideThinkingBlock API：拿**本 pane 自己的** hideThinkingBlock 当基准，
  * 和目标不一致时用 `herdr pane send-keys <pane> ctrl+t` 翻转一次。
+ *
+ * 基准不能取 settings.json：那个文件被所有 pane 共享，别的窗口一按键它就变了。
+ * 拿它当基准的话，本 pane 会误判「已经是目标值」而跳过注入，thinking 永远不展开。
  *
  * 两个独立 hook，不计数、不记用户按键：
  *   agent_start   → 目标 false（展开，生成中能看见思考）
@@ -16,7 +19,7 @@
  * 手按 Ctrl+T 仍显示原生提示。只在 Herdr pane 的 TUI 里生效。
  */
 
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	BashExecutionComponent,
@@ -30,9 +33,13 @@ import {
 const PANE_ID = process.env.HERDR_PANE_ID;
 const ENABLED = process.env.HERDR_ENV === "1" && !!PANE_ID;
 const SETTINGS_PATH = join(getAgentDir(), "settings.json");
+const TRACE_PATH = join(getAgentDir(), "auto-hide-thinking.log");
+const TRACE_MAX_BYTES = 128 * 1024;
 const SEND_TIMEOUT_MS = 2_000;
 const WAIT_FOR_FILE_MS = 1_500;
 const UNKNOWN_FILE_MS = 1_500;
+/** 等本 pane 实例被捕获的宽限期，超时才退回全局 settings.json。 */
+const MODE_WAIT_MS = 600;
 const POLL_MS = 25;
 const MUTE_MS = 1_500;
 const THINKING_STATUS = /^Thinking blocks: (?:hidden|visible)$/;
@@ -44,6 +51,7 @@ type ThinkingHost = {
 	ui?: {
 		requestRender?: () => void;
 	};
+	handleEvent?: (event: unknown) => unknown;
 	toggleThinkingBlockVisibility?: () => void;
 	updateThinkingBlockVisibility?: () => void;
 	showStatus?: (message: string) => void;
@@ -69,11 +77,13 @@ type PatchState = {
 	};
 	muteTimer?: ReturnType<typeof setTimeout>;
 	originalShowStatus?: (message: string) => void;
+	originalHandleEvent?: (event: unknown) => unknown;
 	originalToggleThinking?: () => void;
 	originalUpdateThinking?: () => void;
 	originalToolRender?: (width: number) => string[];
 	originalBashRender?: (width: number) => string[];
 	showStatusWrapper?: (message: string) => void;
+	handleEventWrapper?: (event: unknown) => unknown;
 	toggleThinkingWrapper?: () => void;
 	updateThinkingWrapper?: () => void;
 	toolRenderWrapper?: (width: number) => string[];
@@ -106,6 +116,26 @@ function isTui(ctx: ExtensionContext): boolean {
 	return ctx.mode === "tui";
 }
 
+/**
+ * 诊断用日志。只记「装/卸补丁」和「状态被降级成未知」这两类事件，一轮对话最多几条，
+ * 所以常开。写文件而不是 stderr —— TUI 下往 stderr 写会打乱画面。
+ */
+function trace(message: string): void {
+	try {
+		const line = `${new Date().toISOString()} ${PANE_ID ?? "-"} ${message}\n`;
+		let size = 0;
+		try {
+			size = statSync(TRACE_PATH).size;
+		} catch {
+			size = 0;
+		}
+		if (size > TRACE_MAX_BYTES) writeFileSync(TRACE_PATH, line);
+		else appendFileSync(TRACE_PATH, line);
+	} catch {
+		// 诊断不能影响主流程。
+	}
+}
+
 /** 读不到或 JSON 坏了时返回 undefined，避免把半写入当成 false。 */
 function readHideThinkingBlock(): boolean | undefined {
 	try {
@@ -116,6 +146,37 @@ function readHideThinkingBlock(): boolean | undefined {
 		return typeof value === "boolean" ? value : undefined;
 	} catch {
 		return undefined;
+	}
+}
+
+/**
+ * 本 pane 自己的 thinking 可见性。
+ *
+ * settings.json 是所有 pane 共享的全局文件：其它窗口一按键它就会变，所以它只能当
+ * 兜底，不能拿来判定「本 pane 已经是目标值了」——否则别的窗口展开过，本 pane 就会
+ * 误以为自己也展开了，直接跳过注入 Ctrl+T，thinking 永远不展开。
+ */
+function readPaneHidden(state: PatchState): boolean | undefined {
+	const live = state.activeMode?.hideThinkingBlock;
+	if (typeof live === "boolean") return live;
+	return readHideThinkingBlock();
+}
+
+/** 同上，但给实例捕获一点时间（agent_start 与 pi 自己的 handleEvent 同一轮到达）。 */
+async function resolvePaneHidden(
+	state: PatchState,
+	signal: AbortSignal,
+): Promise<boolean | undefined> {
+	const deadline = Date.now() + MODE_WAIT_MS;
+	for (;;) {
+		const live = state.activeMode?.hideThinkingBlock;
+		if (typeof live === "boolean") return live;
+		if (Date.now() >= deadline) return readHideThinkingBlock();
+		try {
+			await sleep(POLL_MS, signal);
+		} catch {
+			return undefined;
+		}
 	}
 }
 
@@ -170,23 +231,49 @@ function installPatches(): PatchState | undefined {
 	if (state.enabled) return state;
 	state.enabled = true;
 	state.generation += 1;
-	state.activeMode = undefined;
+	// 故意不清 activeMode：/reload 只换扩展和资源，TUI 实例本身没变，留着这个引用
+	// 才能在下面 requestRender。
 	state.desiredHidden = undefined;
 	state.requestId += 1;
 	state.activePump?.controller.abort();
 	state.activePump = undefined;
 	clearMute(state);
 
-	const configuredHidden = readHideThinkingBlock();
-	if (configuredHidden !== undefined) state.processVisible = !configuredHidden;
+	const configuredHidden = readPaneHidden(state);
+	// session.reload() 的顺序是 beforeSessionStart()（重画聊天区）→ session_start
+	// （这时才装补丁），所以聊天区刚被「还没补丁」的原生 render 画过一遍。这里必须走
+	// setProcessVisible 并带上 requestRender，否则屏幕上会一直留着展开的工具块，
+	// 直到下一次碰巧的渲染请求。
+	if (configuredHidden !== undefined) setProcessVisible(state, !configuredHidden, true);
+	trace(
+		`install configuredHidden=${configuredHidden} live=${state.activeMode ? "yes" : "no"} processVisible=${state.processVisible}`,
+	);
 
 	if (!state.originalShowStatus && typeof proto.showStatus === "function") {
 		state.originalShowStatus = proto.showStatus;
 		state.showStatusWrapper = function (this: unknown, message: string) {
+			// showStatus 调用频繁，顺手把 TUI 引用捞回来（install 需要它来 requestRender）。
+			if (state) state.activeMode = this as ThinkingHost;
 			if (state && shouldMuteThinkingStatus(state, message)) return;
 			return state?.originalShowStatus?.call(this, message);
 		};
 		proto.showStatus = state.showStatusWrapper;
+	}
+
+	// handleEvent 每个 agent 事件都走一遍，是拿本 pane 实例最稳的地方。
+	if (!state.originalHandleEvent && typeof proto.handleEvent === "function") {
+		state.originalHandleEvent = proto.handleEvent;
+		state.handleEventWrapper = function (this: ThinkingHost, event: unknown) {
+			state!.activeMode = this;
+			const hidden = this.hideThinkingBlock;
+			if (typeof hidden === "boolean" && state!.processVisible !== !hidden) {
+				// 本 pane 的思考可见性变了（注入的 Ctrl+T / 手动按键 / 设置面板），
+				// 工具块跟着走，不要等下一次 hook。
+				setProcessVisible(state!, !hidden, true);
+			}
+			return state!.originalHandleEvent!.call(this, event);
+		};
+		proto.handleEvent = state.handleEventWrapper;
 	}
 
 	if (!state.originalToggleThinking && typeof proto.toggleThinkingBlockVisibility === "function") {
@@ -246,12 +333,15 @@ function uninstallPatches(state: PatchState): void {
 	state.activePump?.controller.abort();
 	state.activePump = undefined;
 	clearMute(state);
-	state.activeMode = undefined;
+	// activeMode 同样保留：同一个 TUI 实例，reload 后还要靠它 requestRender。
 	state.processVisible = undefined;
 
 	const proto = InteractiveMode.prototype as unknown as PatchedInteractivePrototype;
 	if (state.showStatusWrapper && proto.showStatus === state.showStatusWrapper) {
 		proto.showStatus = state.originalShowStatus;
+	}
+	if (state.handleEventWrapper && proto.handleEvent === state.handleEventWrapper) {
+		proto.handleEvent = state.originalHandleEvent;
 	}
 	if (state.toggleThinkingWrapper && proto.toggleThinkingBlockVisibility === state.toggleThinkingWrapper) {
 		proto.toggleThinkingBlockVisibility = state.originalToggleThinking;
@@ -274,19 +364,23 @@ function uninstallPatches(state: PatchState): void {
 	// Keep the Symbol state reusable after `/reload`: the old wrappers were
 	// restored above, so a later install must capture the current originals again.
 	state.originalShowStatus = undefined;
+	state.originalHandleEvent = undefined;
 	state.originalToggleThinking = undefined;
 	state.originalUpdateThinking = undefined;
 	state.originalToolRender = undefined;
 	state.originalBashRender = undefined;
 	state.showStatusWrapper = undefined;
+	state.handleEventWrapper = undefined;
 	state.toggleThinkingWrapper = undefined;
 	state.updateThinkingWrapper = undefined;
 	state.toolRenderWrapper = undefined;
 	state.bashRenderWrapper = undefined;
 	currentPatchState = undefined;
+	trace("uninstall");
 }
 
 async function waitUntilHidden(
+	state: PatchState,
 	target: boolean,
 	timeoutMs: number,
 	signal: AbortSignal,
@@ -294,10 +388,10 @@ async function waitUntilHidden(
 	const started = Date.now();
 	while (Date.now() - started < timeoutMs) {
 		if (signal.aborted) return false;
-		if (readHideThinkingBlock() === target) return true;
+		if (readPaneHidden(state) === target) return true;
 		await sleep(POLL_MS, signal);
 	}
-	return !signal.aborted && readHideThinkingBlock() === target;
+	return !signal.aborted && readPaneHidden(state) === target;
 }
 
 async function sendCtrlT(
@@ -310,8 +404,10 @@ async function sendCtrlT(
 			timeout: SEND_TIMEOUT_MS,
 			signal,
 		});
+		trace(`sendCtrlT code=${result.code} stderr=${result.stderr.slice(0, 120)}`);
 		return result.code === 0;
-	} catch {
+	} catch (error) {
+		trace(`sendCtrlT threw ${String(error)}`);
 		return false;
 	}
 }
@@ -331,7 +427,7 @@ async function pump(pi: ExtensionAPI, state: PatchState, generation: number): Pr
 			!controller.signal.aborted
 		) {
 			const target = state.desiredHidden;
-			const current = readHideThinkingBlock();
+			const current = await resolvePaneHidden(state, controller.signal);
 			if (current === undefined) {
 				unknownSince ??= Date.now();
 				if (Date.now() - unknownSince > UNKNOWN_FILE_MS) {
@@ -340,6 +436,7 @@ async function pump(pi: ExtensionAPI, state: PatchState, generation: number): Pr
 					}
 					unknownSince = undefined;
 					// Do not leave stale hidden/visible state in the render wrappers.
+					trace("processVisible=undefined settings.json 连续 1.5s 读不到");
 					state.processVisible = undefined;
 					continue;
 				}
@@ -361,6 +458,7 @@ async function pump(pi: ExtensionAPI, state: PatchState, generation: number): Pr
 
 			// 静音必须在 send 之前：按键由 TUI 在 await 期间处理。
 			muteNextThinkingStatus(state);
+			trace(`pump:decide target=${target} current=${current}`);
 			const sent = await sendCtrlT(pi, controller.signal);
 			if (controller.signal.aborted) return;
 			if (!sent) {
@@ -373,6 +471,7 @@ async function pump(pi: ExtensionAPI, state: PatchState, generation: number): Pr
 			let reachedTarget: boolean;
 			try {
 				reachedTarget = await waitUntilHidden(
+					state,
 					target,
 					WAIT_FOR_FILE_MS,
 					controller.signal,
@@ -387,6 +486,7 @@ async function pump(pi: ExtensionAPI, state: PatchState, generation: number): Pr
 				setProcessVisible(state, !target, true);
 			} else if (!reachedTarget && state.requestId === requestId && state.desiredHidden === target) {
 				// 没确认到目标状态时不猜测，也不把工具块误隐藏；下次 hook 再重试。
+				trace(`processVisible=undefined ctrl+t 未在 1.5s 内确认 target=${target}`);
 				state.desiredHidden = undefined;
 				state.processVisible = undefined;
 			}
@@ -417,6 +517,7 @@ function requestHidden(pi: ExtensionAPI, state: PatchState, hidden: boolean): vo
 }
 
 export default function (pi: ExtensionAPI): void {
+	trace(`factory loaded enabled=${ENABLED}`);
 	if (!ENABLED) return;
 
 	const ensureTuiPatches = (ctx: ExtensionContext): PatchState | undefined => {
@@ -425,16 +526,25 @@ export default function (pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", (_event, ctx) => {
+		trace(`session_start mode=${ctx.mode}`);
 		ensureTuiPatches(ctx);
 	});
 	pi.on("agent_start", (_event, ctx) => {
+		trace(`agent_start mode=${ctx.mode}`);
 		const state = ensureTuiPatches(ctx);
-		if (!state) return;
+		if (!state) {
+			trace("agent_start 无补丁状态");
+			return;
+		}
 		requestHidden(pi, state, false);
 	});
 	pi.on("agent_settled", (_event, ctx) => {
+		trace(`agent_settled mode=${ctx.mode}`);
 		const state = ensureTuiPatches(ctx);
-		if (!state) return;
+		if (!state) {
+			trace("agent_settled 无补丁状态");
+			return;
+		}
 		requestHidden(pi, state, true);
 	});
 	pi.on("session_shutdown", () => {

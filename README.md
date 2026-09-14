@@ -12,6 +12,7 @@
 | [`extensions/startup-sync.ts`](extensions/startup-sync.ts) | 启动时自动同步 pi 配置仓库（双向提交 + fetch/rebase + push）。⚠️ 与本机备份脚本 `scripts/backup.sh` 强耦合，属于个人环境专用 |
 | [`extensions/steer-or-interrupt.ts`](extensions/steer-or-interrupt.ts) | Opt+Enter：没有进行中的 tool 时立刻中断当前回答并发送；有挂起的 tool 时走内置 steering |
 | [`extensions/auto-hide-thinking.ts`](extensions/auto-hide-thinking.ts) | Herdr 下联动显示/隐藏 thinking 与完整工具块：生成中可见，整轮结束后收起；`Ctrl+T` 恢复两者，`Ctrl+O` 仍只控制工具展开。只在 Herdr pane 生效 |
+| [`extensions/scroll-to-last-prompt.ts`](extensions/scroll-to-last-prompt.ts) | 每轮回复结束后，自动把「我上一条消息」的第一行顶到屏幕顶部，方便从头顺序读本轮回复；生成中手动上翻过则不打扰，下次发送消息自动恢复跟随。只在 fullscreen TUI 生效 |
 | [`extensions/reload-all/`](extensions/reload-all/) | `/reload-all` — 把 Herdr 里所有空闲的 pi 窗口重载一遍；跳过忙碌或输入框里有未提交草稿的窗口 |
 | [`extensions/codex-usage/`](extensions/codex-usage/) | `/status` 查看 ChatGPT Codex 的 5 小时 / 周额度，底部状态栏常驻摘要；复用 pi 管理的 `openai-codex` OAuth |
 | [`extensions/model-filter.ts`](extensions/model-filter.ts) | 隐藏内置 provider 里用不到的历史模型（默认过滤 `openai-codex` 的 gpt-5.3~5.5），在 `/model` 与 `--list-models` 生效 |
@@ -74,3 +75,4 @@ ln -s "$PWD/pi-extension/skills/read-terminal" ~/.agents/skills/read-terminal
 - 目录里没有 `herdr-agent-state.ts`：该文件由 [herdr](https://github.com/ezra-herdr/herdr) 自动生成并管理，重装集成会被覆盖，不适合公开分发。
 - `auto-hide-thinking.ts` 只在 Herdr 的 TUI pane 里生效：拿**本 pane 自己的** `hideThinkingBlock` 当基准（`settings.json` 被所有 pane 共享，只能当兑底，不能用来判定“已经是目标值”），不一致时用 `herdr pane send-keys` 注入 `Ctrl+T`；thinking 隐藏时，Bash、Read、Edit 等工具块整体不渲染。`Ctrl+T` 会同时恢复 thinking 和工具块，`Ctrl+O` 仍只切换工具块内部的预览/完整输出。非 Herdr / print / RPC 模式直接空操作。
 - 这些插件来自我的个人配置，部分（如 `startup-sync.ts`）与我的本机环境耦合，仅供参考，按需裁剪。
+- `scroll-to-last-prompt.ts` 只在 `tuiMode: "fullscreen"` 下生效。它给 `UserMessageComponent` 渲染后的首行打标记来精确命中「我上一条消息」，而不是扫 pi 内置的 `OSC 133;A`——助手那条没有工具调用的纯文本消息也会带同样的前缀，只扫标记会定位成回复开头。滚动会让 ScrollView 退出「跟随最新」，所以下一次发送消息时（`alt+enter` 排队的消息除外）自动恢复跟随。

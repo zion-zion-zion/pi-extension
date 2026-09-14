@@ -82,7 +82,7 @@ pi 的 `requestRender()` 是合并的（`if (this.renderRequested) return`），
 
 ## 验证
 
-离线哈希测试（`/tmp` 下用 jiti 加载扩展，不启动 pi，驱动假 host + 假 layout + **真实 `ScrollView`**，共 44 项断言）：
+离线哈希测试（`/tmp` 下用 jiti 加载扩展，不启动 pi，驱动假 host + 假 layout + **真实 `ScrollView`**，共 53 项断言）：
 
 1. 长回复落位到最后一条用户消息行；只滚一次。
 2. **核心回归**：收起前 200 行 / 用户消息在第 150 行，收起后 60 行 / 同一消息在第 20 行 → 必须只按 20 落位，不能先滚 150 再被 clamp。
@@ -92,6 +92,9 @@ pi 的 `requestRender()` 是合并的（`if (this.renderRequested) return`），
 6. `alt+enter` 排队 follow-up 不跳；之后正常发送才恢复跟随。
 7. `regular` 模式与找不到标记行 → 完全空操作。
 8. `/reload` 后不嵌套包装、复用同一份标记、仍能吸附与恢复跟随；`session_shutdown` 后 `render` / `handleEvent` / `doRender` 全部还原。
+9. **真机事故回归**：与另一个同样包装 `InteractiveMode.prototype.handleEvent` 的扩展共存，连续 3 次 `/reload` → 不爆栈、吸附仍生效、竞争包装器每次事件仍只被调一次。
+
+> 2026-09-14 真机确实因这两个扩展共存爆过一次栈（`RangeError: Maximum call stack size exceeded`，一发消息 pi 就退出）。根因在 `auto-hide-thinking.ts` 旧代码：它还原 `handleEvent` 会被本扩展的包装器挡住，却照样清空 `originalHandleEvent`，下次安装就把自己的旧包装器当成 `original`，而包装器内部又是**动态读** `state.originalHandleEvent` → 自己调自己。本扩展全程用**闭包常量**持有 `original`，所以没有这个自杀路径（上面第 9 项就是在盯它）。
 
 真机验证（`~/.pi/agent/scroll-to-last-prompt.log`）：
 

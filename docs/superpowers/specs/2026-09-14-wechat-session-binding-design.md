@@ -19,7 +19,7 @@
 - 冷启动恢复：锚点 workspace 里没有活着的 pi pane 时，用 `pi -c` 拉起"上次用的那个会话"
 - 微信远程命令：`/new <名字>`、`/resume`、`/use <序号|名字>`，`/status` 增加当前会话信息
 - 锚点 pane 内的扩展命令：`/wechat new`、`/wechat use`、`/wechat anchor`（拥有命令 ctx，是唯一能真正切会话的入口）
-- 通过 `herdr pane run` 把上述扩展命令注入锚点 pane
+- 通过 `pi.sendUserMessage("/wechat …", { expandPromptTemplates: true })` 在本进程内派发扩展命令（pi 内部走 `_tryExecuteExtensionCommand`，handler 拿到的是带会话控制能力的命令 ctx）—— 不往 pane 里打字
 - 判定结果的可见性：`/wechat status`、`/wechat anchor`
 
 **不做：**
@@ -54,16 +54,27 @@ w5:p7  working  /Users/jiezhou/Desktop/公司其他/pi-extension
 
 `herdr workspace list` 返回 `workspace_id` / `label` / `pane_count`，实测本机 3 个 workspace（`~` / `investment` / `pi-extension`）。
 
-**B. `herdr pane run` = 把文字和回车一次发进 pane**
+**B. 扩展命令可以在本进程内派发（不需要往 pane 里打字）**
 
-官方语义（`herdr --skill`）：*"`pane run` atomically sends command text and Enter."* reload-all 已在用同一模式：
+`sendUserMessage` 的 options 接受 `expandPromptTemplates`（`dist/core/extensions/types.d.ts:975-984`），它会透传给 `prompt()`（`dist/core/agent-session.js:1185`）。而 `prompt()` 在 `expandPromptTemplates` 为真且文本以 `/` 开头时，先尝试执行**扩展注册的命令**（`agent-session.js:825-840`）：
 
-```ts
-// /Users/jiezhou/Desktop/公司其他/pi-extension/extensions/reload-all/index.ts:301
-await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
+```js
+if (expandPromptTemplates && text.startsWith("/")) {
+    const handled = await this._tryExecuteExtensionCommand(text);
 ```
 
-环境判定沿用 `extensions/auto-hide-thinking.ts`：`process.env.HERDR_ENV === "1" && !!process.env.HERDR_PANE_ID`。
+`_tryExecuteExtensionCommand`（`agent-session.js:954-974`）取的是**命令 ctx**，源码注释原文：*"Get command context from extension runner (includes session control methods)"*：
+
+```js
+const ctx = this._extensionRunner.createCommandContext();
+await command.handler(args, ctx);
+```
+
+所以 `pi.sendUserMessage("/wechat new 修bug", { expandPromptTemplates: true })` 就能在本进程内、以命令 ctx 执行我们自己的扩展命令 —— **不需要 Herdr 注入，也没有往 pane 打字的草稿/手速竞争问题**。
+
+注意不能用 `deliverAs` 排队：`steer()` / `followUp()` 对扩展命令直接抛错（`agent-session.js:1018-1023`、`1034-1039`），所以必须 `expandPromptTemplates: true` 立即执行。
+
+Herdr 相关能力的总开关沿用 `extensions/auto-hide-thinking.ts` 的写法：`process.env.HERDR_ENV === "1" && !!process.env.HERDR_PANE_ID`。
 
 **C. `-c` 的语义 = "mtime 最新的会话文件"，且只在进程启动时算一次**
 
@@ -107,21 +118,24 @@ await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
 |---|---|---|
 | `src/anchor.ts` | 纯逻辑 + herdr 调用：解析锚点状态、列会话、解析序号/名字 | `pi.exec("herdr", ...)`、会话目录 |
 | `src/index.ts`（桥接生命周期） | session_start 时按锚点判定决定是否抢锁；锚点信息进状态栏 | `anchor.ts`、`auth.ts` 锁 |
-| `src/remote-commands.ts`（微信侧） | 解析 `/new` `/resume` `/use`，注入锚点命令 | `anchor.ts` |
+| `src/remote-commands.ts`（微信侧） | 解析 `/new` `/resume` `/use`，回执 + 进程内派发扩展命令 | `anchor.ts` |
 | `src/commands.ts`（TUI 侧） | 新增 `/wechat new` `/wechat use` `/wechat anchor`，这些 handler 拥有命令 ctx | `currentCtx = ExtensionCommandContext` |
 
 数据流：
 
 ```
-微信消息 ──► 轮询进程（= 锚点 pane 的 pi 进程）
+微信消息 ──► 轮询进程（必然就是锚点 pane 的 pi 进程：只有锚点才抢锁）
               │  /new 修bug
               ▼
-        remote-commands.ts ──► herdr pane run <anchorPane> "/wechat new 修bug"
-              │                                    │
-              │（先回执）                          ▼
-              │                       锚点 pane 的 pi 执行扩展命令 handler
-              │                                    │（拥有 ExtensionCommandContext）
-              └────────── 锁交接 ◄──────────────────┘
+        remote-commands.ts ──► 先回执
+                           └─► pi.sendUserMessage("/wechat new 修bug", { expandPromptTemplates: true })
+                                        │
+                                        ▼
+                    pi 内部派发扩展命令 handler（命令 ctx，含会话控制）
+                                        │
+                        ctx.newSession() / ctx.switchSession()
+                                        │
+              ┌──────── 会话替换 + 锁交接 ◄┘
                     旧实例 shutdown：停轮询 + 释放锁
                     新实例 session_start：判定锚点 → 抢锁 → 开始轮询
 ```
@@ -159,10 +173,10 @@ await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
 
 | 命令 | 行为 |
 |---|---|
-| `/new <名字>` | 校验空闲 → 回执"正在新建会话 名字…" → 注入 `/wechat new 名字` |
+| `/new <名字>` | 校验空闲 → 回执"正在新建会话 名字…" → 进程内派发 `/wechat new 名字` |
 | `/new` | 同上传入自动名字：`微信 MM-DD HH:mm` |
 | `/resume` | 扫锚点 cwd 的会话目录，回列表（见下） |
-| `/use <序号\|名字>` | 解析成会话（本地解析，不交给模型）→ **注入时传会话 ID 前缀**（如 `/wechat use a1b2c3d4`），不传序号：序号只在微信侧用于展示和输入，避免"列完到切换之间新增活动把顺序打乱"导致切错会话 |
+| `/use <序号\|名字>` | 解析成会话（本地解析，不交给模型）→ **派发时传会话 ID 前缀**（如 `/wechat use a1b2c3d4`），不传序号：序号只在微信侧用于展示和输入，避免"列完到切换之间新增活动把顺序打乱"导致切错会话 |
 | `/status` | 增加一行：`会话: 修bug (a1b2c3d4 · 12 条 · 2 分钟前)` |
 
 列表格式（不经过模型，直接回文本）：
@@ -199,9 +213,9 @@ await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
 
 1. 微信 `/new 修bug` 到达轮询进程（它必然就是锚点进程）
 2. 校验：`isAnchor`（不是 → 回"桥接不在锚点会话"）；`agentIdle`（不是 → 回"正在忙，稍后再试"）
-3. **先回执**："正在新建会话 修bug…" —— 必须在注入之前，因为第 6 步会销毁本实例的 client
-4. `herdr pane run <anchorPane> "/wechat new 修bug"`（超时 2s，失败 → 回错误给微信）
-5. 锚点 pane 的 pi 把这一行当用户输入 → 扩展命令 handler（`commands.ts`）
+3. **先回执**："正在新建会话 修bug…" —— 必须在派发之前，因为第 6 步会销毁本实例的 client
+4. `pi.sendUserMessage("/wechat new 修bug", { expandPromptTemplates: true })` → pi 立即派发给本扩展的命令 handler（同一个进程，命令 ctx）。派发不会抛错；真正的失败由 handler 自己回微信
+5. handler（`src/commands.ts`）校验名字 → 准备 `ctx.newSession(...)`
 6. handler 调 `ctx.newSession(...)`：
    - 旧实例 `session_shutdown` → `stopBridge({ releaseLock: true })` → 停心跳、abort 长轮询、释放锁、`disposeClient()`
    - 新实例 `session_start` → `resolveAnchor()`（走兜底判据）→ 抢锁 → 开始轮询
@@ -232,8 +246,9 @@ await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
 |---|---|
 | herdr 命令超时/非 0 退出 | 视为"判定失败"，**不抢锁**（fail-safe：宁可不接微信，也不污染会话）；`/wechat anchor` 显示原始 stderr |
 | `herdr pane list` JSON 解析失败 | 同上 |
-| 锚点 pane 有未提交草稿 | 复用 reload-all 的 `detect.ts` 判定；拒绝注入并回微信"锚点窗口有草稿，请先处理" |
-| 注入时锚点不是 idle | 拒绝并回微信"锚点正在忙，稍后再试"（延伸：这是命令处理器自己的状态，可直接读） |
+| 命令 handler 内部抛错 | pi 会把它吞成"扩展错误"并写日志（`agent-session.js:967-973`），调用方拿不到 —— **所以 handler 的关键失败路径必须自己发回微信**，不能指望调用方报错 |
+| 派发时本会话不是 idle | 拒绝并回微信"正在忙，稍后再试" |
+| `/new` 名字为空 | 用自动名字（`微信 MM-DD HH:mm`） |
 | `/use` 序号越界 / 名字不匹配 | 回当前列表 + 错误说明 |
 | `/use` 目标会话已被删除 | 回"该会话文件已不存在"，刷新列表 |
 | `/use` 目标不在锚点 cwd 下 | 拒绝（与「不做跨项目」一致），回"只能切到微信空间内的会话" |
@@ -257,7 +272,7 @@ await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
 4. 微信 `/resume` → 列表与会话目录实际内容一致
 5. 微信 `/use 2` → 切回旧会话，问一个只有旧会话知道的事 → 答对（验证上下文真的回来了）
 6. `/reload-all` → 锚点仍是锚点、其他 pane 不抢锁（`lsof` 只应有一条到 `ilinkai.weixin.qq.com` 的连接）
-7. 锚点 pane 里放一个草稿 → 微信 `/new` → 拒绝且草稿完整保留
+7. 让锚点 busy（发一条要跑很久的消息）→ 微信 `/new` → 拒绝并回执"正在忙"
 8. 关掉锚点 pane → 微信无响应；`/wechat status` 能说明原因（`no-pane`）
 
 ## 非目标
@@ -265,13 +280,14 @@ await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
 - **跨项目会话**（在微信里 `/use` 到 `pi-extension` 项目里的某个会话）。pi 的会话与 cwd 绑定，跨项目要连 cwd 一起处理，复杂度上一个台阶，留作后续增量
 - **非 Herdr 降级**。脱离 Herdr 时本机制不生效，行为与今天一致（仍受全局 `autoStart` 影响，但不会自动跑进锚点逻辑）
 - **自动创建 workspace / pane**。用户手工建一个 `wechat` workspace 并跑 `pi -c` 即可
+- **不做 `herdr pane run` 注入**。早期方案靠往 pane 里打字触发命令，已被「技术依据 B」的进程内派发取代：后者没有草稿冲突、没有手速竞争、不依赖目标 pane 的渲染状态
 - **微信侧方向键驱动 `/resume` 选择器**。用序号，避免往 pane 发方向键这种脆操作
 - **多锚点 / 多微信用户分会话**。当前只有一个绑定用户、一个锚点
 
 ## 风险与未决
 
 1. **Herdr `agent_session` 的上报延迟**。最坏情况：`/new` 刚建的新会话在严格判据下被判定"非锚点"→ 微信断线。已用 mtime 兜底判据覆盖；实现阶段的第一件事就是在 w5:p7 上实测一次 `/new` 后 Herdr 指针的刷新时延
-2. **注入与用户手速竞争**。检测到注入之间用户若恰好开始打字，可能碰撞。窗口毫秒级，沿用 reload-all 的结论：接受
+2. **本进程内派发依赖 pi 的 `expandPromptTemplates` 语义**（`agent-session.js:825-840, 954`）。若未来 pi 改动这条路径，派发会静默失效（pi 会把 `/wechat new` 当普通文本发给模型）。缓解：回执前置（先回"正在新建"）+ 结果回执（新实例确认），使失效可被发现
 3. **一个 workspace 多个 pi pane**。本设计取"mtime 最新"，语义模糊（"谁最新谁是锚点"）。若实测发现混乱，改为"拒绝多 pane + 要求用户关掉多余的"
 4. **`/new` 期间微信短暂无桥接**。锁释放→重新抢、长轮询重连，预计 1～3 秒；期间消息在腾讯侧排队，不丢
 5. **会话数量增长带来的列表成本**。列表要遍历会话文件扫 `session_info`；实现时只对包含 `"session_info"` 字样的行做 JSON 解析，并限制只列 10 条。会话数真的很大时再考虑缓存

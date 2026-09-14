@@ -27,6 +27,23 @@
 
 ## 安装
 
+### 方式一：pi 包安装（推荐）
+
+整个仓库已发布为 pi 包，一条命令装全部扩展和 skill：
+
+```bash
+pi install npm:@zionzionzion/pi-extensions
+```
+
+- 装的内容：`extensions/` 下全部扩展 + `skills/read-terminal`
+- 更新：`pi update npm:@zionzionzion/pi-extensions`（或 `pi update --extensions` 一并更新所有包）
+- 卸载：`pi remove npm:@zionzionzion/pi-extensions`
+- 只想启用其中部分：`pi config` 里按需开关，或在 `settings.json` 里用 package 过滤（见 pi 文档的 Package Filtering）
+
+> ⚠️ 如果之前手动复制过扩展到 `~/.pi/agent/extensions/`，装包前先删掉对应副本，否则会双加载。`pi-context-view.json` / `pi-footer.json` 是配置文件不是扩展，不随包分发，留在原处即可。
+
+### 方式二：手动复制（按需挑选）
+
 把需要的 `.ts` 文件复制到全局扩展目录，然后重启 pi 或在 pi 内执行 `/reload` 热加载：
 
 ```bash
@@ -61,6 +78,17 @@ ln -s "$PWD/pi-extension/skills/read-terminal" ~/.agents/skills/read-terminal
 > 放置路径：全局 `~/.pi/agent/extensions/`，项目级 `.pi/extensions/`（需先信任项目）。快速测试可用 `pi -e ./xxx.ts`。Skill 路径：全局 `~/.agents/skills/` 或 `~/.pi/agent/skills/`。
 >
 > 安全提示：扩展和 skill 都以你的完整权限运行，只从可信来源安装。
+
+## 发布
+
+npm 包由 GitHub Actions 自动发布：只要 `package.json` 的 `version` 变化并 push 到 `main`，CI 就会跑测试 → `npm publish` → 自动打 `v*` tag；版本号没变的 push 只跑测试，不会发版。
+
+```bash
+npm version patch   # 或 minor / major
+git push            # 之后全自动，无需手动 npm publish
+```
+
+CI 定义见 [`.github/workflows/publish.yml`](.github/workflows/publish.yml)。
 
 ## 依赖
 

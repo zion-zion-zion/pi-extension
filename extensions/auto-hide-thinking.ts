@@ -311,9 +311,20 @@ function installPatches(): PatchState | undefined {
 	}
 
 	// handleEvent 每个 agent 事件都走一遍，是拿本 pane 实例最稳的地方。
+	//
+	// original 必须用闭包常量捕获，绝不能在调用时读 state!.originalHandleEvent：
+	// scroll-to-last-prompt.ts 也包装同一个原型方法。两个扩展叠加时，/reload 的
+	// session_shutdown 按注册顺序执行，本扩展的还原会因为「别人的 wrapper 盖在最上面」
+	// 被跳过（proto.handleEvent !== state.handleEventWrapper），而旧代码照样清空
+	// originalHandleEvent、把包装器留在原型上；下一次安装就把「自己的旧包装器」当成
+	// original 再包一层。包装器内部又是动态读 state!.originalHandleEvent，于是自己调
+	// 自己 → RangeError: Maximum call stack size exceeded → pi uncaughtException 直接退出。
 	if (!state.originalHandleEvent && typeof proto.handleEvent === "function") {
-		state.originalHandleEvent = proto.handleEvent;
+		const original = proto.handleEvent;
+		state.originalHandleEvent = original;
 		state.handleEventWrapper = function (this: ThinkingHost, event: unknown) {
+			// 已卸载但还原被跳过、还留在原型上：纯透传，别再碰本 pane 状态。
+			if (!state!.enabled) return original.call(this, event);
 			const firstCapture = state!.activeMode !== this;
 			state!.activeMode = this;
 			if (firstCapture) {
@@ -326,7 +337,7 @@ function installPatches(): PatchState | undefined {
 				// 工具块跟着走，不要等下一次 hook。
 				setProcessVisible(state!, !hidden, true);
 			}
-			return state!.originalHandleEvent!.call(this, event);
+			return original.call(this, event);
 		};
 		proto.handleEvent = state.handleEventWrapper;
 	}
@@ -395,8 +406,14 @@ function uninstallPatches(state: PatchState): void {
 	if (state.showStatusWrapper && proto.showStatus === state.showStatusWrapper) {
 		proto.showStatus = state.originalShowStatus;
 	}
+	let restoredHandleEvent = true;
 	if (state.handleEventWrapper && proto.handleEvent === state.handleEventWrapper) {
 		proto.handleEvent = state.originalHandleEvent;
+	} else if (state.handleEventWrapper) {
+		// 另一个扩展（scroll-to-last-prompt）盖在上面，无法安全摘掉这一层。保留
+		// original/wrapper 记录并靠 enabled=false 透传；下次安装看到记录还在，就不会把
+		// 自己的包装器当成 original 再包一层。
+		restoredHandleEvent = false;
 	}
 	if (state.toggleThinkingWrapper && proto.toggleThinkingBlockVisibility === state.toggleThinkingWrapper) {
 		proto.toggleThinkingBlockVisibility = state.originalToggleThinking;
@@ -419,13 +436,17 @@ function uninstallPatches(state: PatchState): void {
 	// Keep the Symbol state reusable after `/reload`: the old wrappers were
 	// restored above, so a later install must capture the current originals again.
 	state.originalShowStatus = undefined;
-	state.originalHandleEvent = undefined;
+	// handleEvent 只在确实还原了原型时才清空记录，否则（见上）会留下「字段没了、包装器还在」
+	// 的孤儿状态，正是爆栈的起点。
+	if (restoredHandleEvent) {
+		state.originalHandleEvent = undefined;
+		state.handleEventWrapper = undefined;
+	}
 	state.originalToggleThinking = undefined;
 	state.originalUpdateThinking = undefined;
 	state.originalToolRender = undefined;
 	state.originalBashRender = undefined;
 	state.showStatusWrapper = undefined;
-	state.handleEventWrapper = undefined;
 	state.toggleThinkingWrapper = undefined;
 	state.updateThinkingWrapper = undefined;
 	state.toolRenderWrapper = undefined;

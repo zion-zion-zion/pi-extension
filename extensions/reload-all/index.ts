@@ -7,17 +7,23 @@
  * 之所以要检测输入框：`herdr pane run` 是把文本追加进目标窗口的编辑器再回车，若那里已有未提交的
  * 草稿，结果会变成「<草稿>/reload」被当普通消息发给模型 —— 宁可漏发，也不能污染别人的草稿。
  *
+ * 报告的通道是 `pi.appendEntry()` + `pi.registerEntryRenderer()`，不是 `ctx.ui.notify()`。
+ * 原因：`ctx.reload()` 会重建整个聊天区，瞬时 notify 会被一起清掉（实测确实如此，见设计文档
+ * 「报告」一节）。custom entry 持久化在 session 里，且 `renderSessionEntries()` 对
+ * `entry.type === "custom"` 有专门分支，因此扛得住自身 reload；notify 只留作瞬时提示。
+ *
  * 最后用 ctx.reload() 重载自己。文档要求把它当终止操作，之后不能再执行任何逻辑。
  */
 
 import { basename } from "node:path";
+import { Box, Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { detectEditorState, type EditorState } from "./detect.ts";
 
 const PANE_ID = process.env.HERDR_PANE_ID ?? "";
 const ENABLED = process.env.HERDR_ENV === "1" && PANE_ID !== "";
 const EXEC_TIMEOUT_MS = 2_000;
-const MAX_REPORT_CHARS = 500;
+const ENTRY_TYPE = "reload-all-report";
 
 type SkipReason = "busy" | "draft" | "unconfirmed";
 
@@ -35,6 +41,15 @@ type Pane = {
 };
 
 type Skip = { paneId: string; reason: SkipReason; cwd: string };
+type Failure = { paneId: string; error: string };
+
+/** 落进 session 的报告数据。字段名变化会影响历史 entry 的渲染，改名前请考虑向后兼容。 */
+type ReportData = {
+	at: string;
+	sent: string[];
+	failed: Failure[];
+	skipped: Skip[];
+};
 
 function asString(value: unknown): string {
 	return typeof value === "string" ? value : "";
@@ -42,6 +57,12 @@ function asString(value: unknown): string {
 
 function errText(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function stamp(): string {
+	const now = new Date();
+	const pad = (value: number) => String(value).padStart(2, "0");
+	return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
 async function execHerdr(pi: ExtensionAPI, args: string[]): Promise<string> {
@@ -91,25 +112,37 @@ async function readEditorState(pi: ExtensionAPI, paneId: string): Promise<Editor
 	}
 }
 
-function buildReport(
-	sent: string[],
-	failed: { paneId: string; error: string }[],
-	skipped: Skip[],
-): string {
-	const parts: string[] = [];
-	if (sent.length > 0) parts.push(`已重载 ${sent.length}`);
-	if (failed.length > 0) {
-		parts.push(`发送失败 ${failed.length}（${failed.map((f) => `${f.paneId} ${f.error}`).join(" · ")}）`);
+/** 报告正文（不含标题行）。纯函数，便于将来单测。 */
+export function reportLines(data: ReportData): string[] {
+	const head = [`已重载 ${data.sent.length}`];
+	if (data.failed.length > 0) head.push(`发送失败 ${data.failed.length}`);
+	if (data.skipped.length > 0) head.push(`跳过 ${data.skipped.length}`);
+
+	const lines = [head.join(" · ")];
+	for (const failure of data.failed) {
+		lines.push(`  ❌ ${failure.paneId}  ${failure.error}`);
 	}
-	if (skipped.length > 0) {
-		const detail = skipped
-			.map((s) => `${s.paneId} ${REASON_LABEL[s.reason]}${s.cwd ? `·${s.cwd}` : ""}`)
-			.join(" · ");
-		parts.push(`跳过 ${skipped.length}（${detail}）`);
+	for (const skip of data.skipped) {
+		lines.push(
+			`  ⏭️ ${skip.paneId}  ${REASON_LABEL[skip.reason]}${skip.cwd ? `  ${skip.cwd}` : ""}`,
+		);
 	}
-	const body = parts.length === 0 ? "没有其它 pi 窗口" : parts.join(" | ");
-	const report = `/reload-all：${body}`;
-	return report.length > MAX_REPORT_CHARS ? `${report.slice(0, MAX_REPORT_CHARS - 1)}…` : report;
+	return lines;
+}
+
+function registerReportRenderer(pi: ExtensionAPI): void {
+	pi.registerEntryRenderer(ENTRY_TYPE, (entry, { expanded }, theme) => {
+		const data = entry.data as ReportData;
+		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+		box.addChild(new Text(`${theme.bold("/reload-all")}  ${theme.fg("dim", data.at ?? "")}`));
+		for (const line of reportLines(data)) {
+			box.addChild(new Text(line));
+		}
+		if (expanded && data.sent.length > 0) {
+			box.addChild(new Text(theme.fg("dim", `已重载：${data.sent.join(", ")}`)));
+		}
+		return box;
+	});
 }
 
 async function reloadAll(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
@@ -122,6 +155,7 @@ async function reloadAll(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promis
 	try {
 		panes = await listPanes(pi);
 	} catch (error) {
+		// 没做成任何事，且不会 reload 自己 —— notify 不会被清掉，无需落盘。
 		ctx.ui.notify(`/reload-all 失败：读取 pane 列表出错 —— ${errText(error)}。未做任何操作。`, "error");
 		return;
 	}
@@ -159,12 +193,22 @@ async function reloadAll(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promis
 	);
 
 	const sent = settled.filter((s) => s.ok).map((s) => s.paneId);
-	const failed = settled
+	const failed: Failure[] = settled
 		.filter((s) => !s.ok)
 		.map((s) => ({ paneId: s.paneId, error: s.error }));
-	const anyFailed = failed.length > 0;
 
-	ctx.ui.notify(buildReport(sent, failed, skipped), anyFailed ? "error" : "info");
+	// 落盘的完整报告：这份才扛得住下面那次 ctx.reload()。
+	pi.appendEntry(ENTRY_TYPE, {
+		at: stamp(),
+		sent,
+		failed,
+		skipped,
+	} satisfies ReportData);
+
+	const summary = [`已重载 ${sent.length}`];
+	if (failed.length > 0) summary.push(`失败 ${failed.length}`);
+	if (skipped.length > 0) summary.push(`跳过 ${skipped.length}`);
+	ctx.ui.notify(`/reload-all：${summary.join(" · ")}（报告见上方）`, failed.length > 0 ? "error" : "info");
 
 	// 终止操作：reload 之后本模块的执行环境即被卸载，不能再做任何事。
 	await ctx.reload();
@@ -172,6 +216,7 @@ async function reloadAll(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promis
 }
 
 export default function (pi: ExtensionAPI): void {
+	registerReportRenderer(pi);
 	pi.registerCommand("reload-all", {
 		description: "重载 Herdr 里所有空闲的 pi 窗口（跳过忙碌或输入框里有草稿的）",
 		handler: async (_args, ctx) => {

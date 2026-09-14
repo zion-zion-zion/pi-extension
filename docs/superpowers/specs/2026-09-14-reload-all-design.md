@@ -123,6 +123,19 @@ agent-session.js:965   await command.handler(args, ctx);
 
 结论：无法靠按键安全清空，只能检测后跳过。
 
+**H. 报告通道的选择依据**
+
+`ctx.ui.notify()` 是瞬时状态提示，`ctx.reload()` 重建聊天区后会消失。这条已经实测确认：2026-09-14 04:00:20 那次 `/reload-all` 成功让 10 个窗口重载（`~/.pi/acp.log` 里 10 条落在同一 500ms 内的 `[session] event=start`），但报告没留下任何痕迹。
+
+因此报告改用 `pi.appendEntry(customType, data)` + `pi.registerEntryRenderer()`。`docs/extensions.md:1418` 明确推荐这个组合用于 *"durable TUI-only content that should not be sent to the LLM"*。
+
+它能扛过 reload 的原因是两段源码：
+
+- `modes/interactive/interactive-mode.js:3193` —— `rebuildChatFromMessages()` 调的是 `renderSessionEntries(this.sessionManager.buildContextEntries())`，跑的是 **entries** 而不只是 messages
+- `modes/interactive/interactive-mode.js:3075-3086` —— `renderSessionEntries()` 里有 `if (entry.type === "custom") return [entry]` 的专门分支
+
+另外 entry 持久化在 session 文件里，且不进 LLM 上下文，不会污染对话。
+
 ## 架构
 
 无外部依赖，只依赖 `pi.exec` 与 `ctx.ui`。
@@ -205,19 +218,35 @@ extensions/reload-all/
 
 ## 报告
 
+双通道：**落盘 entry 为主要通道**（扛得住自身 reload），`ctx.ui.notify` 退化为瞬时提示。
+
+### 落盘 entry（`reload-all-report`）
+
+由 `registerEntryRenderer` 渲染成聊天区里的一块：
+
 ```
-✅ 已重载 8 个窗口
-⏭️ 跳过 3 个：
-   w3:pF  工作中           investment
-   w5:p3  有未提交草稿      pi-extension
-   w2:p2  状态未确认        jiezhou
+/reload-all  2026-09-14 12:08
+已重载 8 · 跳过 3
+  ⏭️ w3:pF  工作中  investment
+  ⏭️ w5:p3  有未提交草稿  pi-extension
+  ⏭️ w2:p2  状态未确认  jiezhou
 ```
+
+首行是标题 + 本地时间；第二行是计数汇总；其后每个跳过/失败项一行。展开时额外列出已重载的 `pane_id` 列表。
 
 三种跳过原因与判定一一对应：`busy → 工作中`、`draft → 有未提交草稿`、`unconfirmed → 状态未确认`。
 
 跳过项给出 `pane_id`、原因、`cwd` 的 basename。同一 `cwd` 下有多个 pane（实测 investment 有 5 个），靠 `pane_id` 区分 —— 用户可在 Herdr 界面里按 pane id 定位。
 
-**报告 vs 自身 reload 的冲突**：见「技术依据 C」，报告必须先于 `ctx.reload()`，因此存在被自身 reload 清掉的风险。该风险列入测试用例，若不满足则退化为 `ctx.ui.setWidget`（常驻 widget，非瞬时 toast）。
+### 瞬时提示（notify）
+
+一行汇总，末尾指向落盘报告：`/reload-all：已重载 8 · 跳过 3（报告见上方）`。有失败时用 `"error"` 类型。
+
+它的职责只是“命令确实跑了”的即时反馈；即使被随后的 reload 清掉也不影响验收，因为完整信息已在 entry 里。
+
+### 为什么不用 notify 单独承担
+
+原因与源码依据见「技术依据 H」。实测已经排除了“notify 能默默活下来”这个可能性。
 
 ## 测试
 
@@ -238,7 +267,7 @@ extensions/reload-all/
 2. `~/.pi/acp.log` 新增 9 条 `[session] event=start`（b-c-p 的 `session_start` 处理器会写这条日志）
 3. busy 的窗口被跳过且列在报告里
 4. 当前窗口自己也 reload 了
-5. 报告在自身 reload 之后仍然可读；若不可读则改 `setWidget`
+5. 报告在自身 reload 之后仍然可读 —— 这是设计的主要约束，见「技术依据 H」；瞬时 notify 被清掉不算失败
 6. **在某空闲窗口输入草稿但不提交 → 运行 `/reload-all` → 该窗口被列为跳过，且草稿原文完整保留**
 
 第 6 条覆盖检测判据的 `occupied` 分支。实现阶段已在 w5:p7 上找到一个真实的草稿实例（草稿 `/wechat` + 斜杠命令补全弹窗），该屏已固化为 `detect.test.ts` 的回归用例；手工用例仍建议跑一次，因为它同时验证"跳过不发送"这个动作本身。
@@ -255,5 +284,5 @@ extensions/reload-all/
 
 1. **检测依赖渲染文本。** 主题、字号、宽字符、终端尺寸变化都可能让判据落入 `unknown`。已用 fail-safe（unknown 即跳过）把后果限制为"漏发"，不会造成破坏
 2. **dialog 覆盖窗口时的行为未实测。** 预期落入 `unknown` 从而跳过，但若 dialog 打开时编辑器框仍被渲染，则 `/reload` 可能被打进 dialog 焦点。首次实测时纳入观察
-3. **报告被自身 reload 清掉。** 测试用例 5 会暴露；退路是 `ctx.ui.setWidget`
+3. **瞬时 notify 会被自身 reload 清掉。** 已确认为事实，不再是风险：完整报告改走落盘 entry（「技术依据 H」），notify 只负责“命令确实跑了”的即时反馈
 4. **`herdr pane run` 的注入与用户手速竞争。** 检测到发送之间若用户恰好开始打字，仍可能碰撞。窗口极窄（毫秒级），接受

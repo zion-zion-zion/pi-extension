@@ -225,18 +225,41 @@ extensions/reload-all/
 由 `registerEntryRenderer` 渲染成聊天区里的一块：
 
 ```
-/reload-all  2026-09-14 12:08
-已重载 8 · 跳过 3
-  ⏭️ w3:pF  工作中  investment
-  ⏭️ w5:p3  有未提交草稿  pi-extension
-  ⏭️ w2:p2  状态未确认  jiezhou
+/reload-all  2026-09-14 12:20
+已重载 8 · 发送失败 1 · 跳过 3
+  w3:pE  investment / 7            ❌ herdr pane run ... 退出码 1
+  w5:p3  pi-extension / 2 pi test  ⏭️ 工作中
+  w5:p7  pi-extension / 5 wechat   ⏭️ 有未提交草稿
+  w2:p2  ~ / 1                     ⏭️ 状态未确认
 ```
 
-首行是标题 + 本地时间；第二行是计数汇总；其后每个跳过/失败项一行。展开时额外列出已重载的 `pane_id` 列表。
+首行是标题 + 本地时间；第二行是计数汇总；其后每个失败/跳过项一行，列宽按当前条目对齐。展开时额外列出已重载的窗口名。
 
 三种跳过原因与判定一一对应：`busy → 工作中`、`draft → 有未提交草稿`、`unconfirmed → 状态未确认`。
 
-跳过项给出 `pane_id`、原因、`cwd` 的 basename。同一 `cwd` 下有多个 pane（实测 investment 有 5 个），靠 `pane_id` 区分 —— 用户可在 Herdr 界面里按 pane id 定位。
+全部为空时输出“没有其它可重载的 pi 窗口”，而不是「已重载 0」—— 后者看不出是没找到还是全失败。
+
+### 窗口标识：工作区标签 / tab 标签
+
+每项用「工作区标签 / tab 标签」+ `pane_id` 标识。四个备选来源的取舍：
+
+| 来源 | 结论 |
+|---|---|
+| Pi 会话名 | **用不了。** `session_info` entry（`core/session-manager.d.ts:81-84`，`name?: string`）在本机所有会话文件里都不存在 |
+| `terminal_title` | **用不了。** 它是从 cwd 推出来的（`π - investment`），同一 cwd 下的 5 个 pane 完全一样 |
+| `pane_id` 单独用 | **不够。** 同一 cwd 下常常挤着多个 pane（实测 investment 有 5 个），`w3:p8` 与 `w3:pA` 对人没有区分度 |
+| Herdr tab 标签 | **采用。** 那是用户在 tab 栏上真正看到的名字（实测：`2 pi test` / `5 wechat` / `4 packages`），来自 `herdr workspace list` + `herdr tab list --workspace <id>` |
+
+名字在写 entry 时就解析成最终字符串存进去，渲染器因此无需再调 herdr。取不到时回退到 cwd 的 basename，绝不让“起名字”这件事拖垮整个命令。
+
+### 落盘格式的兼容性
+
+`reload-all-report` 的结构随版本变过：
+
+1. 最早：`sent: string[]`，`skipped: { paneId, reason, cwd }`
+2. 现在：`sent: Named[]`，`label` 为已解析的「工作区 / tab」
+
+session 里的历史 entry 不会因代码更新而重写，所以 `reportLines()` 对上述形态一律容错（`toNamed()` / `toReason()`），字段缺失或类型错乱都降级渲染而不是抛错。这也是 `ReportData` 的字段类型诚实写为 `unknown[]` 的原因 —— 写一个已经不准的联合类型只会骗过编译器。
 
 ### 瞬时提示（notify）
 

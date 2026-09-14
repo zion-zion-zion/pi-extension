@@ -1,0 +1,38 @@
+{
+  "name": "@zion/pi-extensions",
+  "version": "0.1.0",
+  "description": "Zion's pi extensions: reload-all, auto-hide-thinking, codex-usage, checkpoint, commits and more",
+  "type": "module",
+  "license": "UNLICENSED",
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zion-zion-zion/pi-extension.git"
+  },
+  "files": [
+    "extensions/*.ts",
+    "extensions/codex-usage",
+    "extensions/reload-all",
+    "skills",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --test extensions/codex-usage/*.test.ts extensions/reload-all/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "extensions/*.ts",
+      "extensions/codex-usage/index.ts",
+      "extensions/reload-all/index.ts"
+    ],
+    "skills": [
+      "skills"
+    ]
+  }
+}

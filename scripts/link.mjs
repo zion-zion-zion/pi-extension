@@ -21,7 +21,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, rmSync, symlinkSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, symlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -39,6 +39,7 @@ const ITEMS = [
 	{ src: "extensions/scroll-to-last-prompt.ts", dest: join(EXT_DIR, "scroll-to-last-prompt.ts") },
 	{ src: "extensions/model-filter.ts", dest: join(EXT_DIR, "model-filter.ts") },
 	{ src: "extensions/restart.ts", dest: join(EXT_DIR, "restart.ts") },
+	{ src: "extensions/herdr-session-title.ts", dest: join(EXT_DIR, "herdr-session-title.ts") },
 	{ src: "extensions/commits.ts", dest: join(EXT_DIR, "commits.ts") },
 	{ src: "extensions/checkpoint.ts", dest: join(EXT_DIR, "checkpoint.ts") },
 	{ src: "extensions/steer-or-interrupt.ts", dest: join(EXT_DIR, "steer-or-interrupt.ts") },
@@ -137,6 +138,30 @@ function printDiff(item) {
 	console.log("     → 建议：把较新的那份搬到另一边（cp），再重跑 --fix");
 }
 
+/**
+ * 反向稽核：仓库里出现了清单没写的新产物时报警。
+ *
+ * 这台机器上经常同时开着好几个 pi 窗口写这个仓库，新扩展是被别人加进来的 —— 清单靠人记得
+ * 更新就会过期，所以让脚本自己发现它（不在 ITEMS / NOT_INSTALLED 里就算问题）。
+ */
+function auditList() {
+	const known = new Set([...ITEMS, ...NOT_INSTALLED].map((item) => item.src));
+	const unknown = [];
+
+	for (const [dir, prefix] of [
+		[join(REPO, "extensions"), "extensions"],
+		[join(REPO, "skills"), "skills"],
+	]) {
+		if (!existsSync(dir)) continue;
+		for (const name of readdirSync(dir)) {
+			if (name.startsWith(".")) continue;
+			const path = `${prefix}/${name}`;
+			if (!known.has(path)) unknown.push(path);
+		}
+	}
+	return unknown;
+}
+
 function main() {
 	const fix = process.argv.includes("--fix");
 	if (process.argv.includes("--help") || process.argv.includes("-h")) {
@@ -170,6 +195,13 @@ function main() {
 		if (status.kind === "wrong-target") console.log(`     软链当前指向: ${status.target}`);
 	}
 
+	const unknown = auditList();
+	if (unknown.length > 0) {
+		problems += unknown.length;
+		console.log("\n⚠️  仓库里有产物没进清单（新加的就在 ITEMS 里补一行）：");
+		for (const path of unknown) console.log(`  • ${path}`);
+	}
+
 	if (NOT_INSTALLED.length > 0) {
 		console.log("\n（本机故意不安装）");
 		for (const item of NOT_INSTALLED) console.log(`  ⏭️  ${item.src} —— ${item.reason}`);
@@ -178,11 +210,14 @@ function main() {
 	console.log("\n（这些不属于本仓库，别软链进来）");
 	for (const line of NOT_OURS) console.log(`  🚫 ${line}`);
 
+	const total = problems + unknown.length;
+	const detail = unknown.length > 0 ? `（漂移/缺失 ${problems}；未进清单 ${unknown.length}）` : "";
 	console.log(
-		`\n合计 ${ITEMS.length} 项：需处理 ${problems}${fixed > 0 ? `（本次已修 ${fixed}）` : ""}` +
-			(problems > 0 && !fix ? "  → 跑 node scripts/link.mjs --fix 收敛可自动处理的部分" : ""),
+		`\n合计 ${ITEMS.length} 项：需处理 ${total}${detail}${fixed > 0 ? `（本次已修 ${fixed}）` : ""}`,
 	);
-	return problems > 0 ? 1 : 0;
+	if (problems > 0 && !fix) console.log("  → 漂移/缺失：`node scripts/link.mjs --fix` 可收敛「拷贝一致 / 缺失」");
+	if (unknown.length > 0) console.log("  → 未进清单：在 scripts/link.mjs 的 ITEMS 里补一行（或添到 NOT_INSTALLED）");
+	return total > 0 ? 1 : 0;
 }
 
 process.exit(main());

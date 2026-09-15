@@ -13,7 +13,11 @@ node scripts/link.mjs          # 检查：软链正确 / 拷贝 / 漂移 / 缺�
 node scripts/link.mjs --fix    # 把「拷贝一致 / 缺失」收敛成软链
 ```
 
-`scripts/link.mjs` 里的 `ITEMS` 是**唯一权威清单**（同时写明哪些故意不装、哪些不属于本仓库）。新增扩展 / skill 时在那里加一行，别在别处再维护一份列表。
+`scripts/link.mjs` 里的 `ITEMS` 是**唯一权威清单**。新增扩展 / skill：在 `ITEMS` 加一行 → `node scripts/link.mjs --fix` 建软链 → 与代码一起提交；本机故意不装的写进 `NOT_INSTALLED` 并给出理由。清单之外的顶层产物会被脚本报成「未进清单」。
+
+## 改完让窗口吃到新代码
+
+仓库里改完，pi 里跑的还是旧模块，需要用户执行 `/reload`（快、不换进程）或 `/restart`（换进程，才能刷新 `models.json` / 环境变量 / pi 本体，以及原型、闭包、Symbol 里的脏状态）。把选哪条的理由讲清楚，别只说「reload 一下」—— 对照与选型见 [README](README.md)「说明」与 `docs/superpowers/specs/2026-09-14-restart-design.md`。
 
 ## 漂移要判方向
 

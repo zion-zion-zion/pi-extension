@@ -13,12 +13,24 @@
 | [`extensions/steer-or-interrupt.ts`](extensions/steer-or-interrupt.ts) | Opt+Enter：没有进行中的 tool 时立刻中断当前回答并发送；有挂起的 tool 时走内置 steering |
 | [`extensions/auto-hide-thinking.ts`](extensions/auto-hide-thinking.ts) | Herdr 下联动显示/隐藏 thinking 与完整工具块：生成中可见，整轮结束后收起；`Ctrl+T` 恢复两者，`Ctrl+O` 仍只控制工具展开。只在 Herdr pane 生效 |
 | [`extensions/scroll-to-last-prompt.ts`](extensions/scroll-to-last-prompt.ts) | 每轮回复结束后，自动把「我上一条消息」的第一行顶到屏幕顶部，方便从头顺序读本轮回复；生成中手动上翻过则不打扰，下次发送消息自动恢复跟随。只在 fullscreen TUI 生效 |
+| [`extensions/herdr-session-title.ts`](extensions/herdr-session-title.ts) | 把 pi 会话名作为 pane token（`pi_session`）报给 Herdr，供侧边栏 Agent 行显示；`session_start` / `session_info_changed` 时同步，`/name` 改名立刻跟着变。只在 Herdr pane 生效 |
 | [`extensions/reload-all/`](extensions/reload-all/) | `/reload-all` 把 Herdr 里所有空闲的 pi 窗口重载一遍；`/restart-all` 把它们**重启**一遍（换进程、各自回到自己的对话）。两者都跳过忙碌 / 输入框里有草稿的窗口 |
 | [`extensions/restart.ts`](extensions/restart.ts) | `/restart` — 重启**本窗口**（换进程，回到同一个对话）。`/reload` 只换扩展代码、不换进程，清不掉内存里被污染的状态时用它。只在 Herdr pane 生效 |
 | [`extensions/codex-usage/`](extensions/codex-usage/) | `/status` 查看 ChatGPT Codex 的 5 小时 / 周额度，底部状态栏常驻摘要；复用 pi 管理的 `openai-codex` OAuth |
 | [`extensions/model-filter.ts`](extensions/model-filter.ts) | 隐藏内置 provider 里用不到的历史模型（默认过滤 `openai-codex` 的 gpt-5.3~5.5），在 `/model` 与 `--list-models` 生效 |
 | [`extensions/pi-footer.json`](extensions/pi-footer.json) | pi 底部状态栏（footer）配置：布局、图标、widget 等 |
 | [`extensions/pi-context-view.json`](extensions/pi-context-view.json) | 「Context View」颜色主题配置（各消息类型的颜色） |
+
+### 配套：Herdr 侧边栏显示 pi 会话名
+
+`herdr-session-title.ts` 只是把名字上报成 pane token，还要在 `~/.config/herdr/config.toml` 里把它排进侧边栏 Agent 行（保持两行，不换行，超宽由 Herdr 截断）：
+
+```toml
+[ui.sidebar.agents]
+rows = [["state_icon", "machine", "workspace", "tab"], ["agent", "$pi_session"]]
+```
+
+没有名字的会话（token 被清空）第 2 行只显示 `pi`，不会留空行也不会多出第三行。
 
 ## Skills
 

@@ -105,39 +105,49 @@ POSIX 下 detached 会让子进程 `setsid` 成为新进程组组长，父进程
 ## 架构
 
 ```
-extensions/restart.ts            新增，单文件
-  ├─ restartPane()               共用原语：重启「某一个窗口」（导出）
-  └─ /restart                    命令：重启本窗口（守卫 → waitForIdle → 分离助手 → shutdown）
+extensions/restart.ts                    新增，单文件、零依赖
+  └─ /restart                            命令：守卫 → waitForIdle → 分离助手 → shutdown
 
-extensions/reload-all/index.ts   改动
-  ├─ /reload-all                 不变
-  └─ /restart-all                新增：扫描 + 过滤（复用）→ 对每个目标调 restartPane() → 报告
+extensions/reload-all/index.ts           改动
+  ├─ /reload-all                         行为不变（目标筛选抽到 plan.ts）
+  ├─ /restart-all                        新增：扫 pane → 逐个 restartPane() → 报告
+  ├─ plan.ts                             新增，纯函数 classifyPane()（可单测，不依赖 pi）
+  ├─ plan.test.ts                        新增单测
+  └─ restart-pane.ts                     新增：重启一个窗口的 TS 版四步原语
 ```
 
-**依赖方向只有一条**：`reload-all/index.ts` → `import { restartPane } from "../restart.ts"`。
-理由：② 的四步流程（含超时与失败语义）只应存在一份；反过来让 `restart.ts` 依赖批量逻辑会把
-小巧的单文件拖成目录扩展。
+**两个扩展零交叉依赖**：`reload-all/index.ts` 只 import 同目录的 `plan.ts` / `restart-pane.ts`；
+`restart.ts` 不 import 仓库里任何其他文件。
 
-`/restart` 与 `/restart-all` 的其余部分互不耦合：前者不需要扫 pane、不需要报告；
-后者不需要分离助手（执行它的进程自己不会退出）。
+一开始的设计是反向的（`reload-all` import `../restart.ts`），实现时被实测否掉了 —— 2026-09-15
+在一个测试窗口里启动 pi 直接失败：
 
-**一处必须承认的重复**：「重启某一个窗口」的四步序列有两份实现 —— TS 版（`restartPane()`，给
-`/restart-all` 用）和 Shell 版（分离助手，给 `/restart` 用）。Shell 版只服务于「自己」这一种情况，
-因为它必须在「本进程已经不存在」之后才能执行。改超时/改步骤时两处必须一起改。
+```
+Error: Failed to load extension "/Users/jiezhou/.pi/agent/extensions/reload-all/index.ts":
+Failed to load extension: Cannot find module '../restart.ts'
+```
+
+即：**让已装的扩展依赖未装的新文件，会把整个 pi 拖死**。改成同目录后，两个扩展可以各自
+单独安装、单独升级。
+
+**一处必须承认的重复**：「重启某一个窗口」的四步序列有两份实现 —— TS 版
+（`reload-all/restart-pane.ts`，给 `/restart-all` 用）和 Shell 版（`restart.ts` 里的分离助手，
+给 `/restart` 用）。Shell 版只服务于「自己」这一种情况，因为它必须在「本进程已经不存在」之后
+才能执行。改超时/改步骤时两处必须一起改。
 
 **环境假设**：分离助手继承 pi 的环境，因此 `PATH` 里必须有 `herdr`（本机为
 `/opt/homebrew/bin/herdr`）。
 
 ## 共用原语：重启「某一个窗口」
 
-`restartPane(pi, { paneId, sessionPath })`（由 `/restart-all` 调用）依次做四步，**任一步失败就返回
-失败，不再继续**：
+`restartPane(pi, { paneId, sessionRef })`（实现位于 `extensions/reload-all/restart-pane.ts`，
+由 `/restart-all` 调用）依次做四步，**任一步失败就返回失败，不再继续**：
 
-1. 前置校验：`paneId`、`sessionPath` 均非空（任一为空视为失败，绝不猜）。
+1. 前置校验：`paneId`、`sessionRef` 均非空（任一为空视为失败，绝不猜）。
 2. 退出：`herdr pane run <paneId> "/quit"`（超时 2s）。
 3. 等它退到 shell：轮询 `herdr pane process-info --pane <paneId>`，直到 `argv0 !== "pi"`
    （最长 10s，步长 100ms）。超时 = 失败，**不执行第 4 步**。
-4. 重启：`herdr pane run <paneId> 'pi --session "<sessionPath>"'`（超时 2s）。
+4. 重启：`herdr pane run <paneId> 'pi --session "<sessionRef>"'`（超时 2s）。
 
 设计取舍：第 3 步是「宁可不重启，也不污染」的闸门。若某窗口因为任何原因没退干净，我们只是
 少重启一个窗口，而不是往它的输入框里灌一行文本。
@@ -227,11 +237,26 @@ type ReportData = {
   3. 制造「Herdr 没有会话记录」的窗口 → 确认被跳过，而不是起成新对话；
   4. 检查 `~/.pi/agent/restart.log` 有无异常。
 
+## 实现后的验收结果（2026-09-15）
+
+- 单测：`cd extensions/reload-all && npm test` → `tests 20 / pass 20 / fail 0`
+  （13 个原有的输入框检测 + 7 个新增的 `classifyPane` 判定）。
+- 实测引号语义（w5:pF，废弃窗口）：`printf "[%s]\n" "a b" "c"` 与 `ls "/tmp/sp ace"` 都按预期
+  执行 —— herdr 把整条命令原样发进 shell，引号由目标 shell 解析。
+- 实测分离助手能活过父进程退出（`spawn` detached + `unref`，父进程 `process.exit(0)` 后 2s 仍写入文件）。
+- 实测四步原语（w5:pF）：`/quit` → 第 2 次轮询前台变成 `fish` → `pi --session "<原路径>"` →
+  `pane list` 里 session 与重启前**完全相同**。
+- 实测 `/restart` 端到端（一次性测试窗口 w5:pG，用 `pi -e ./extensions/restart.ts` 加载）：
+  `~/.pi/agent/restart.log` 记录 `helper start` → `relaunch: pi --session …` → `helper done exit=0`，
+  重启后 `pane list` 的 session 与重启前完全相同。
+- 批量命令 `/restart-all` 的逐窗口行为依赖真实的多窗口环境，留作人工验收（见「测试」一节）。
+
 ## 安装与文档
 
 - `/restart` 是单文件扩展：需要把 `extensions/restart.ts` 软链/复制到 `~/.pi/agent/extensions/`
   （与 `commits.ts` 等一致）。
-- `reload-all/` 已经是目录型扩展，无需重新链接。
+- `reload-all/` 已经是目录型扩展，无需重新链接（新增的 `plan.ts` / `restart-pane.ts` 都在目录内）。
+- 两者互不依赖，**单独装、单独升级都可以**（见「架构」里的实测教训）。
 - README：新增 `/restart` 一行；把 `reload-all/` 一行改成「`/reload-all`、`/restart-all` ——
   批量重载 / 重启空闲窗口」。
 

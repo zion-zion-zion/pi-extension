@@ -23,28 +23,13 @@ import { basename } from "node:path";
 import { Box, Text } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { detectEditorState, type EditorState } from "./detect.ts";
+import { classifyPane, isSkipReason, REASON_LABEL, type Pane, type SkipReason } from "./plan.ts";
+import { restartPane } from "./restart-pane.ts";
 
 const PANE_ID = process.env.HERDR_PANE_ID ?? "";
 const ENABLED = process.env.HERDR_ENV === "1" && PANE_ID !== "";
 const EXEC_TIMEOUT_MS = 2_000;
 const ENTRY_TYPE = "reload-all-report";
-
-type SkipReason = "busy" | "draft" | "unconfirmed";
-
-const REASON_LABEL: Record<SkipReason, string> = {
-	busy: "工作中",
-	draft: "有未提交草稿",
-	unconfirmed: "状态未确认",
-};
-
-type Pane = {
-	paneId: string;
-	agent: string;
-	agentStatus: string;
-	cwd: string;
-	tabId: string;
-	workspaceId: string;
-};
 
 /** 报告里每个 pane 都携带已解析好的显示名，渲染器无需再调 herdr。 */
 type Named = { paneId: string; label: string };
@@ -60,6 +45,8 @@ type Skip = Named & { reason: SkipReason };
  */
 type ReportData = {
 	at: string;
+	/** 写报告的命令，用于标题与「已重载 / 已重启」措辞；历史 entry 没有这个字段。 */
+	command?: string;
 	sent: unknown[];
 	failed: unknown[];
 	skipped: unknown[];
@@ -103,6 +90,7 @@ async function listPanes(pi: ExtensionAPI): Promise<Pane[]> {
 	return raw.map((entry) => {
 		const pane = (entry ?? {}) as Record<string, unknown>;
 		const cwd = asString(pane.cwd);
+		const session = (pane.agent_session ?? {}) as Record<string, unknown>;
 		return {
 			paneId: asString(pane.pane_id),
 			agent: asString(pane.agent),
@@ -110,6 +98,9 @@ async function listPanes(pi: ExtensionAPI): Promise<Pane[]> {
 			cwd: cwd === "" ? "" : basename(cwd) || cwd,
 			tabId: asString(pane.tab_id),
 			workspaceId: asString(pane.workspace_id),
+			// herdr 的 pi 集成在 session_start / agent_start 时上报；kind 通常是 "path"，
+			// 退化成会话 id 时 `pi --session` 也收，所以不做 kind 限定。
+			sessionRef: asString(session.value),
 		};
 	});
 }
@@ -189,7 +180,7 @@ function toNamed(value: unknown): Named {
 
 function toReason(value: unknown): SkipReason {
 	const reason = asString(toRecord(value).reason);
-	return reason === "busy" || reason === "draft" || reason === "unconfirmed" ? reason : "unconfirmed";
+	return isSkipReason(reason) ? reason : "unconfirmed";
 }
 
 function row(paneId: string, label: string, tail: string, paneWidth: number, labelWidth: number): string {
@@ -209,13 +200,14 @@ export function reportLines(data: ReportData): string[] {
 		reason: toReason(value),
 	}));
 
-	const head = [`已重载 ${sent.length}`];
+	const verb = data.command === "/restart-all" ? "重启" : "重载";
+	const head = [`已${verb} ${sent.length}`];
 	if (failed.length > 0) head.push(`发送失败 ${failed.length}`);
 	if (skipped.length > 0) head.push(`跳过 ${skipped.length}`);
 
 	// 全零时说清楚是“没找到”，否则“已重载 0”看不出是没找到还是全失败。
 	if (sent.length === 0 && failed.length === 0 && skipped.length === 0) {
-		return ["没有其它可重载的 pi 窗口"];
+		return [`没有其它可${verb}的 pi 窗口`];
 	}
 
 	const entries = [
@@ -243,8 +235,11 @@ export function reportLines(data: ReportData): string[] {
 function registerReportRenderer(pi: ExtensionAPI): void {
 	pi.registerEntryRenderer(ENTRY_TYPE, (entry, { expanded }, theme) => {
 		const data = entry.data as ReportData;
+		// 历史 entry 没有 `command`，按 /reload-all 渲染（见设计文档「报告」）。
+		const command = asString(data.command) || "/reload-all";
+		const verb = command === "/restart-all" ? "重启" : "重载";
 		const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-		box.addChild(new Text(`${theme.bold("/reload-all")}  ${theme.fg("dim", data.at ?? "")}`));
+		box.addChild(new Text(`${theme.bold(command)}  ${theme.fg("dim", asString(data.at))}`));
 		for (const line of reportLines(data)) {
 			box.addChild(new Text(line));
 		}
@@ -252,59 +247,51 @@ function registerReportRenderer(pi: ExtensionAPI): void {
 			const sent = (data.sent ?? []).map(toNamed);
 			if (sent.length > 0) {
 				const names = sent.map((item) => item.label || item.paneId).join("、");
-				box.addChild(new Text(theme.fg("dim", `已重载：${names}`)));
+				box.addChild(new Text(theme.fg("dim", `已${verb}：${names}`)));
 			}
 		}
 		return box;
 	});
 }
 
-async function reloadAll(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
-	if (!ENABLED) {
-		ctx.ui.notify("/reload-all 只在 Herdr 里可用（HERDR_ENV !== 1），未做任何操作。", "error");
-		return;
-	}
-
-	let panes: Pane[];
-	try {
-		panes = await listPanes(pi);
-	} catch (error) {
-		// 没做成任何事，且不会 reload 自己 —— notify 不会被清掉，无需落盘。
-		ctx.ui.notify(`/reload-all 失败：读取 pane 列表出错 —— ${errText(error)}。未做任何操作。`, "error");
-		return;
-	}
-
+/**
+ * 扫描 + 分类：哪些窗口可以动、哪些要跳过。
+ * `/reload-all` 传 `requireSession = false`（它不关心会话），`/restart-all` 传 `true`。
+ */
+async function selectPanes(
+	pi: ExtensionAPI,
+	panes: Pane[],
+	requireSession: boolean,
+): Promise<{ targets: Pane[]; skipped: Skip[] }> {
 	const targets: Pane[] = [];
 	const skipped: Skip[] = [];
 
 	for (const pane of panes) {
-		if (pane.agent !== "pi" || pane.paneId === "" || pane.paneId === PANE_ID) continue;
-		if (pane.agentStatus !== "idle") {
-			skipped.push({ paneId: pane.paneId, label: "", reason: "busy" });
-			continue;
+		let verdict = classifyPane(pane, PANE_ID, requireSession, "unread");
+		if (verdict.kind === "need-editor") {
+			verdict = classifyPane(pane, PANE_ID, requireSession, await readEditorState(pi, pane.paneId));
 		}
-		const state = await readEditorState(pi, pane.paneId);
-		if (state === "empty") {
-			targets.push(pane);
-		} else {
-			skipped.push({
-				paneId: pane.paneId,
-				label: "",
-				reason: state === "occupied" ? "draft" : "unconfirmed",
-			});
-		}
+		if (verdict.kind === "ignore" || verdict.kind === "need-editor") continue;
+		if (verdict.kind === "target") targets.push(pane);
+		else skipped.push({ paneId: pane.paneId, label: "", reason: verdict.reason });
 	}
 
-	const settled = await Promise.all(
-		targets.map(async (pane) => {
-			try {
-				await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
-				return { pane, ok: true as const, error: "" };
-			} catch (error) {
-				return { pane, ok: false as const, error: errText(error) };
-			}
-		}),
-	);
+	return { targets, skipped };
+}
+
+/** 两条批量命令共用的收尾：解析显示名 → 落盘 entry → 瞬时 notify。 */
+async function emitReport(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	input: {
+		command: string;
+		panes: Pane[];
+		targets: Pane[];
+		skipped: Skip[];
+		settled: Array<{ pane: Pane; ok: boolean; error: string }>;
+	},
+): Promise<void> {
+	const { command, panes, targets, skipped, settled } = input;
 
 	// 名字只在这里解析一次，写进 entry 的最终字符串里。
 	const involved = [...targets, ...skipped.map((skip) => panes.find((p) => p.paneId === skip.paneId) ?? null)]
@@ -327,22 +314,83 @@ async function reloadAll(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promis
 		label: labelOf(skip.paneId, ""),
 	}));
 
-	// 落盘的完整报告：这份才扛得住下面那次 ctx.reload()。
 	pi.appendEntry(ENTRY_TYPE, {
 		at: stamp(),
+		command,
 		sent,
 		failed,
 		skipped: skippedNamed,
 	} satisfies ReportData);
 
-	const summary = [`已重载 ${sent.length}`];
+	const verb = command === "/restart-all" ? "重启" : "重载";
+	const summary = [`已${verb} ${sent.length}`];
 	if (failed.length > 0) summary.push(`失败 ${failed.length}`);
 	if (skippedNamed.length > 0) summary.push(`跳过 ${skippedNamed.length}`);
-	ctx.ui.notify(`/reload-all：${summary.join(" · ")}（报告见上方）`, failed.length > 0 ? "error" : "info");
+	ctx.ui.notify(`${command}：${summary.join(" · ")}（报告见上方）`, failed.length > 0 ? "error" : "info");
+}
+
+async function reloadAll(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
+	if (!ENABLED) {
+		ctx.ui.notify("/reload-all 只在 Herdr 里可用（HERDR_ENV !== 1），未做任何操作。", "error");
+		return;
+	}
+
+	let panes: Pane[];
+	try {
+		panes = await listPanes(pi);
+	} catch (error) {
+		// 没做成任何事，且不会 reload 自己 —— notify 不会被清掉，无需落盘。
+		ctx.ui.notify(`/reload-all 失败：读取 pane 列表出错 —— ${errText(error)}。未做任何操作。`, "error");
+		return;
+	}
+
+	const { targets, skipped } = await selectPanes(pi, panes, false);
+	const settled = await Promise.all(
+		targets.map(async (pane) => {
+			try {
+				await execHerdr(pi, ["pane", "run", pane.paneId, "/reload"]);
+				return { pane, ok: true as const, error: "" };
+			} catch (error) {
+				return { pane, ok: false as const, error: errText(error) };
+			}
+		}),
+	);
+
+	// 落盘的完整报告：这份才扛得住下面那次 ctx.reload()。
+	await emitReport(pi, ctx, { command: "/reload-all", panes, targets, skipped, settled });
 
 	// 终止操作：reload 之后本模块的执行环境即被卸载，不能再做任何事。
 	await ctx.reload();
 	return;
+}
+
+async function restartAll(pi: ExtensionAPI, ctx: ExtensionCommandContext): Promise<void> {
+	if (!ENABLED) {
+		ctx.ui.notify("/restart-all 只在 Herdr 里可用（HERDR_ENV !== 1），未做任何操作。", "error");
+		return;
+	}
+
+	let panes: Pane[];
+	try {
+		panes = await listPanes(pi);
+	} catch (error) {
+		ctx.ui.notify(`/restart-all 失败：读取 pane 列表出错 —— ${errText(error)}。未做任何操作。`, "error");
+		return;
+	}
+
+	// 与 /reload-all 的唯一区别：必须能恢复同一个对话，所以没有会话记录的窗口一律不动。
+	const { targets, skipped } = await selectPanes(pi, panes, true);
+	const settled = await Promise.all(
+		targets.map(async (pane) => {
+			const result = await restartPane(pi, { paneId: pane.paneId, sessionRef: pane.sessionRef });
+			return result.ok
+				? { pane, ok: true as const, error: "" }
+				: { pane, ok: false as const, error: result.error };
+		}),
+	);
+
+	await emitReport(pi, ctx, { command: "/restart-all", panes, targets, skipped, settled });
+	// 不 reload 自己：执行这条命令的窗口没有被重启，也不需要换代码。
 }
 
 export default function (pi: ExtensionAPI): void {
@@ -351,6 +399,12 @@ export default function (pi: ExtensionAPI): void {
 		description: "重载 Herdr 里所有空闲的 pi 窗口（跳过忙碌或输入框里有草稿的）",
 		handler: async (_args, ctx) => {
 			await reloadAll(pi, ctx);
+		},
+	});
+	pi.registerCommand("restart-all", {
+		description: "重启 Herdr 里所有空闲的 pi 窗口（换进程，各自回到自己的对话；跳过忙碌/有草稿/无会话记录的）",
+		handler: async (_args, ctx) => {
+			await restartAll(pi, ctx);
 		},
 	});
 }

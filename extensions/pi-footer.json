@@ -12,8 +12,8 @@
     "colorLevel": "ansi256"
   },
   "extensionStatusRow": {
-    "hiddenKeys": [],
-    "knownKeys": []
+    "hiddenKeys": ["codex-usage", "token_speed"],
+    "knownKeys": ["codex-usage", "token_speed"]
   },
   "lines": [
     [
@@ -143,6 +143,16 @@
           "icon": "⚡",
           "hideWhenEmpty": true,
           "fg": "brightCyan"
+        }
+      },
+      {
+        "id": "codex-usage-event",
+        "type": "event",
+        "enabled": true,
+        "options": {
+          "raw": true,
+          "hideWhenEmpty": true,
+          "widgetId": "codex-usage"
         }
       }
     ]

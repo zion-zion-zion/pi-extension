@@ -55,42 +55,29 @@ pi install npm:@zionzionzion/pi-extensions
 
 > ⚠️ 如果之前手动复制过扩展到 `~/.pi/agent/extensions/`，装包前先删掉对应副本，否则会双加载。`pi-context-view.json` / `pi-footer.json` 是配置文件不是扩展，不随包分发，留在原处即可。
 
-### 方式二：手动复制（按需挑选）
+### 方式二：手动软链（按需挑选）
 
-把需要的 `.ts` 文件复制到全局扩展目录，然后重启 pi 或在 pi 内执行 `/reload` 热加载：
-
-```bash
-# 以 commits.ts 为例
-cp extensions/commits.ts ~/.pi/agent/extensions/
-# 在 pi 里执行 /reload
-```
-
-也可以直接把这个仓库克隆下来，用软链接指向扩展目录：
+**开发机上用软链，不要 `cp`**：`cp` 出来的是拷贝，之后改仓库不生效、两边静默漂移；`ln -s` 的是同一个文件 —— **仓库即唯一真源**。
 
 ```bash
 git clone https://github.com/zion-zion-zion/pi-extension.git
-ln -s "$PWD/pi-extension/extensions" ~/.pi/agent/extensions-local
+cd pi-extension
+
+ln -s "$PWD/extensions/commits.ts"  ~/.pi/agent/extensions/commits.ts    # 单文件扩展
+ln -s "$PWD/extensions/codex-usage" ~/.pi/agent/extensions/codex-usage   # 目录型扩展
+ln -s "$PWD/skills/read-terminal"   ~/.agents/skills/read-terminal       # skill
 ```
 
-`codex-usage` 是目录型扩展，需要把整个目录放到扩展路径下：
+装完重启 pi，或在 pi 内 `/reload`。完整清单（哪些故意不装、哪些不属于本仓库）与漂移检查都在脚本里：
 
 ```bash
-cp -R extensions/codex-usage ~/.pi/agent/extensions/
-# 或软链接
-ln -s "$PWD/pi-extension/extensions/codex-usage" ~/.pi/agent/extensions/codex-usage
+node scripts/link.mjs          # 检查：软链正确 / 拷贝 / 漂移 / 缺失
+node scripts/link.mjs --fix    # 把「拷贝一致 / 缺失」收敛成软链；漂移项只报告
 ```
 
-Skill 放到全局 skill 目录即可被 pi 发现：
-
-```bash
-cp -R skills/read-terminal ~/.agents/skills/
-# 或软链接
-ln -s "$PWD/pi-extension/skills/read-terminal" ~/.agents/skills/read-terminal
-```
+改完仓库里的代码要确认两边一致时，也跑上面第一条。给 agent 的完整规矩见 [`AGENTS.md`](AGENTS.md)。
 
 > 放置路径：全局 `~/.pi/agent/extensions/`，项目级 `.pi/extensions/`（需先信任项目）。快速测试可用 `pi -e ./xxx.ts`。Skill 路径：全局 `~/.agents/skills/` 或 `~/.pi/agent/skills/`。
->
-> **复制 vs 软链，选软链**：`cp` 出来的是一份**拷贝**，以后改仓库里的源码不会生效（仓库和 pi 加载的那份会静默漂移）；`ln -s` 的是**同一个文件**，改仓库等于改 pi 正在加载的代码。所以「仓库是唯一真源」只在软链下成立。
 >
 > 安全提示：扩展和 skill 都以你的完整权限运行，只从可信来源安装。
 

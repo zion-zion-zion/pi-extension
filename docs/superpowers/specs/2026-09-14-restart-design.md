@@ -25,6 +25,34 @@ Maximum call stack size exceeded` → pi 以 uncaughtException 退出（现场�
 | `/reload`（重载本窗口的扩展，不换进程） | `/restart`（重启本窗口进程，回同一个对话） |
 | `/reload-all`（批量重载空闲窗口） | `/restart-all`（批量重启空闲窗口） |
 
+## 与 `/reload` 的关系：覆盖范围与选型
+
+就「让新东西生效」而言，`/restart` **覆盖** `/reload`：换了进程之后，`/reload` 会重读的东西全部重读，
+而且还多了一批只有新进程才能刷新的东西。
+
+| 类别 | 例子 | `/reload` | `/restart` |
+|---|---|---|---|
+| 扩展 / skills / prompts / themes / keybindings / context 文件 | 改扩展代码 | ✅ | ✅ |
+| 进程环境 | `PATH`、`export` 的变量、`HERDR_*` / `PI_*` | ❌ | ✅ |
+| 只有启动路径才读的配置 | `models.json`、provider / 认证、model runtime（证据见 `reload-all` 设计文档「技术依据 D」） | ❌ | ✅ |
+| 升级后的 pi 本体 / 内置依赖 | 新版本 pi | ❌ | ✅ |
+| 原型 / 闭包 / Symbol 里的脏状态 | 2026-09-14 的爆栈现场；`session_start` 时快照下来、之后一直沿用的参数 | ❌（还可能把它带下去） | ✅ 彻底干净 |
+
+但 `/restart` **不是** `/reload` 的优化替代 —— 它贵在：
+
+- 几秒黑屏与启动开销，而 `/reload` 是亚秒级、不闪屏；
+- 丢掉更多内存态（展开的工具块、滚动位置等）；
+- 依赖分离助手 / Herdr（助手没起来就停在 shell）。
+
+**一个真实的能力差**：`/restart-all` 会跳过「Herdr 还没记录会话」的窗口（刚开、没发过消息的），
+因为没会话记录就重启等于开一个新对话；这种窗口只有 `/reload-all` 能覆盖。
+
+**选型规则**（README「说明」里同步了同一份）：
+
+- 只改了扩展代码、想快速看效果 → `/reload` / `/reload-all`
+- 改了 `models.json` / 环境变量、升级了 pi、或怀疑内存里有脏状态 → `/restart` / `/restart-all`
+- 拿不准 → `/restart`：除了慢几秒，它不会有「半新半旧」这种不确定性
+
 ## 目标
 
 - `/restart`：一条命令重启**本窗口**，起来后仍是**同一个对话**。

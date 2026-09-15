@@ -78,6 +78,8 @@ ln -s "$PWD/pi-extension/skills/read-terminal" ~/.agents/skills/read-terminal
 
 > 放置路径：全局 `~/.pi/agent/extensions/`，项目级 `.pi/extensions/`（需先信任项目）。快速测试可用 `pi -e ./xxx.ts`。Skill 路径：全局 `~/.agents/skills/` 或 `~/.pi/agent/skills/`。
 >
+> **复制 vs 软链，选软链**：`cp` 出来的是一份**拷贝**，以后改仓库里的源码不会生效（仓库和 pi 加载的那份会静默漂移）；`ln -s` 的是**同一个文件**，改仓库等于改 pi 正在加载的代码。所以「仓库是唯一真源」只在软链下成立。
+>
 > 安全提示：扩展和 skill 都以你的完整权限运行，只从可信来源安装。
 
 ## 发布
@@ -104,5 +106,10 @@ CI 定义见 [`.github/workflows/publish.yml`](.github/workflows/publish.yml)。
 - 目录里没有 `herdr-agent-state.ts`：该文件由 [herdr](https://github.com/ezra-herdr/herdr) 自动生成并管理，重装集成会被覆盖，不适合公开分发。
 - `auto-hide-thinking.ts` 只在 Herdr 的 TUI pane 里生效：拿**本 pane 自己的** `hideThinkingBlock` 当基准（`settings.json` 被所有 pane 共享，只能当兑底，不能用来判定“已经是目标值”），不一致时用 `herdr pane send-keys` 注入 `Ctrl+T`；thinking 隐藏时，Bash、Read、Edit 等工具块整体不渲染。`Ctrl+T` 会同时恢复 thinking 和工具块，`Ctrl+O` 仍只切换工具块内部的预览/完整输出。非 Herdr / print / RPC 模式直接空操作。
 - `restart.ts`（`/restart`）与 `reload-all/`（`/reload-all`、`/restart-all`）**互不依赖**，可以单独安装、单独升级。`/restart` 靠一个几行的 `/bin/sh` 分离助手在自己的 pi 退出后再把窗口拉起来（`pi --session <原会话文件>`），助手日志在 `~/.pi/agent/restart.log`；`/restart-all` 只重启「空闲 + 输入框为空 + Herdr 记着会话」的其他窗口，每个窗口任一步失败就跳过它，**绝不**往别人输入框里灌文本。
+- **`/restart` 在「让新东西生效」这件事上覆盖 `/reload`**（换进程后扩展 / skills / prompts / themes / keybindings / context 文件全部重读，并且额外重读 `models.json`、环境变量，用上升级后的 pi 本体，清掉原型/闭包里的脏状态——包括那些 `session_start` 时快照下来、`/reload` 刷不掉的参数）。代价是几秒黑屏，且会丢展开的工具块 / 滚动位置这类内存态。选型：
+  - 只改了扩展代码、想快速看效果 → `/reload` / `/reload-all`（亚秒级、不闪屏）
+  - 改了 `models.json` / 环境变量、升级了 pi、或怀疑内存里有脏状态 → `/restart` / `/restart-all`
+  - 拿不准 → `/restart`：除了慢几秒，它不会有「半新半旧」这种不确定性
+  - 一个真实的能力差：`/restart-all` 会跳过「Herdr 还没记录会话」的窗口（刚开、没发过消息的），那种窗口只有 `/reload-all` 能覆盖
 - 这些插件来自我的个人配置，部分（如 `startup-sync.ts`）与我的本机环境耦合，仅供参考，按需裁剪。
 - `scroll-to-last-prompt.ts` 只在 `tuiMode: "fullscreen"` 下生效。它给 `UserMessageComponent` 渲染后的首行打标记来精确命中「我上一条消息」，而不是扫 pi 内置的 `OSC 133;A`——助手那条没有工具调用的纯文本消息也会带同样的前缀，只扫标记会定位成回复开头。滚动会让 ScrollView 退出「跟随最新」，所以下一次发送消息时（`alt+enter` 排队的消息除外）自动恢复跟随。

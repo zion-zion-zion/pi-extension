@@ -56,9 +56,7 @@ const ITEMS = [
 ];
 
 /** 故意不安装到本机（检查时只作提示，不算问题）。 */
-const NOT_INSTALLED = [
-	{ src: "extensions/startup-sync.ts", reason: "与本机 scripts/backup.sh 强耦合，按需手动安装" },
-];
+const NOT_INSTALLED = [];
 
 /** pi 目录里这些**不属于**本仓库，永远不要软链进来。 */
 const NOT_OURS = [

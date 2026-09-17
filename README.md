@@ -9,7 +9,6 @@
 | [`extensions/commits.ts`](extensions/commits.ts) | `/commits` — 用列表查看当前分支提交历史，选中后 `git show --stat` 查看详情 |
 | [`extensions/checkpoint.ts`](extensions/checkpoint.ts) | `/checkpoint` — 自动生成提交信息并提交当前 git 改动（绝不 push） |
 | [`extensions/token-speed.ts`](extensions/token-speed.ts) | 显示上一条回答的 token 生成速度（tok/s），通过 pi-footer 的 widget 展示；`/speed` 查看详细统计 |
-| [`extensions/startup-sync.ts`](extensions/startup-sync.ts) | 启动时自动同步 pi 配置仓库（双向提交 + fetch/rebase + push）。⚠️ 与本机备份脚本 `scripts/backup.sh` 强耦合，属于个人环境专用 |
 | [`extensions/steer-or-interrupt.ts`](extensions/steer-or-interrupt.ts) | Opt+Enter：没有进行中的 tool 时立刻中断当前回答并发送；有挂起的 tool 时走内置 steering |
 | [`extensions/auto-hide-thinking.ts`](extensions/auto-hide-thinking.ts) | Herdr 下联动显示/隐藏 thinking 与完整工具块：生成中可见，整轮结束后收起；`Ctrl+T` 恢复两者，`Ctrl+O` 仍只控制工具展开。只在 Herdr pane 生效 |
 | [`extensions/scroll-to-last-prompt.ts`](extensions/scroll-to-last-prompt.ts) | 每轮回复结束后，自动把「我上一条消息」的第一行顶到屏幕顶部，方便从头顺序读本轮回复；生成中手动上翻过则不打扰，下次发送消息自动恢复跟随。只在 fullscreen TUI 生效 |
@@ -110,5 +109,5 @@ CI 定义见 [`.github/workflows/publish.yml`](.github/workflows/publish.yml)。
   - 改了 `models.json` / 环境变量、升级了 pi、或怀疑内存里有脏状态 → `/restart` / `/restart-all`
   - 拿不准 → `/restart`：除了慢几秒，它不会有「半新半旧」这种不确定性
   - 一个真实的能力差：`/restart-all` 会跳过「Herdr 还没记录会话」的窗口（刚开、没发过消息的），那种窗口只有 `/reload-all` 能覆盖
-- 这些插件来自我的个人配置，部分（如 `startup-sync.ts`）与我的本机环境耦合，仅供参考，按需裁剪。
+- 这些插件来自我的个人配置，仅供参考，按需裁剪。
 - `scroll-to-last-prompt.ts` 只在 `tuiMode: "fullscreen"` 下生效。它给 `UserMessageComponent` 渲染后的首行打标记来精确命中「我上一条消息」，而不是扫 pi 内置的 `OSC 133;A`——助手那条没有工具调用的纯文本消息也会带同样的前缀，只扫标记会定位成回复开头。滚动会让 ScrollView 退出「跟随最新」，所以下一次发送消息时（`alt+enter` 排队的消息除外）自动恢复跟随。

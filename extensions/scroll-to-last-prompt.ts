@@ -467,6 +467,39 @@ function resumeFollowing(state: ModeState): void {
 	}
 }
 
+/**
+ * 用户跑 `!` / `!!` 命令时调用。pi 的 bash 卡片是追加到 transcript 末尾的,而这条路径既不经过
+ * session.prompt（所以没有 input 事件,上面的 resumeFollowing 永远等不到），pi 自己也不会滚动。
+ * 上一轮的吸附若还在,卡片就静默落在视口下方 —— 看起来像「命令没执行」。
+ * 这里无条件回到末端：用户既然敲了命令就是想看输出,即便他之前自己上翻过也一并拉回来。
+ */
+function jumpToEndForUserBash(state: ModeState): void {
+	state.pending = undefined;
+	state.pinned = undefined;
+	const host = state.host;
+	const tui = host?.ui;
+	if (!host || !tui) {
+		trace("user-bash:skip 尚未捕获本 pane 实例");
+		return;
+	}
+	// regular / print / rpc 下静默空操作。
+	if (tui.mode !== "fullscreen") return;
+
+	const scrollView = tui.currentLayout?.primaryScrollView ?? host.transcriptScrollView;
+	if (!scrollView) {
+		trace("user-bash:skip 拿不到 transcript ScrollView");
+		return;
+	}
+	try {
+		// scrollToEnd 会把 followingEnd 置回 true,卡片随后的追加会继续跟着走。
+		scrollView.scrollToEnd();
+		tui.requestRender?.();
+		trace("user-bash:ok 回到末端");
+	} catch (error) {
+		trace(`user-bash:threw ${String(error)}`);
+	}
+}
+
 export default function (pi: ExtensionAPI): void {
 	trace("factory loaded");
 
@@ -499,6 +532,14 @@ export default function (pi: ExtensionAPI): void {
 			return;
 		}
 		resumeFollowing(modeState!);
+	});
+
+	// `!` / `!!` 命令不走 session.prompt,因此永远不会有 input 事件:必须单独在这里恢复跟随,
+	// 否则卡片会被上一轮的吸附留在视口下方。user_bash 是在 pi 创建 bash 组件之前发出的,
+	// 所以这里的 scrollToEnd 会让后面逐块追加的输出一直留在视口里。
+	pi.on("user_bash", (_event, ctx) => {
+		if (!ensure(ctx)) return;
+		jumpToEndForUserBash(modeState!);
 	});
 
 	pi.on("session_shutdown", () => {

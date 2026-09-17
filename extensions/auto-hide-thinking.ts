@@ -11,8 +11,12 @@
  *   agent_start   → 目标 false（展开，生成中能看见思考）
  *   agent_settled → 目标 true（收起，整轮含 follow-up 结束后藏起来）
  *
- * 思考隐藏时，工具组件的 render 返回空数组，因此 Bash、Read、Edit 等工具块
- * 完全不显示；恢复思考时调用原 render，保留 pi 原有的预览 / 展开状态。
+ * 思考隐藏时，ToolExecutionComponent 的 render 返回空数组，因此 Read、Edit、Bash 等
+ * **agent 工具块**完全不显示；恢复思考时调用原 render，保留 pi 原有的预览 / 展开状态。
+ *
+ * 刻意不碰 BashExecutionComponent：它只用于用户手敲的 `!` / `!!` 命令（agent 的 bash
+ * 工具结果走 ToolExecutionComponent）。连它一起藏的话，用户敲完命令屏幕上什么都不出来，
+ * 看起来像「命令没执行」——用户自己的命令输出必须永远可见。
  * 已经是目标值则空操作。中途手按 Ctrl+T 保持到下一个 hook，再被扳回。
  *
  * 自动翻转会吞掉 pi 那行 `Thinking blocks: visible/hidden`（prototype 补丁）；
@@ -22,7 +26,6 @@
 import { appendFileSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
-	BashExecutionComponent,
 	getAgentDir,
 	InteractiveMode,
 	ToolExecutionComponent,
@@ -94,13 +97,11 @@ type PatchState = {
 	originalToggleThinking?: () => void;
 	originalUpdateThinking?: () => void;
 	originalToolRender?: (width: number) => string[];
-	originalBashRender?: (width: number) => string[];
 	showStatusWrapper?: (message: string) => void;
 	handleEventWrapper?: (event: unknown) => unknown;
 	toggleThinkingWrapper?: () => void;
 	updateThinkingWrapper?: () => void;
 	toolRenderWrapper?: (width: number) => string[];
-	bashRenderWrapper?: (width: number) => string[];
 };
 
 type PatchedInteractivePrototype = ThinkingHost & {
@@ -377,15 +378,8 @@ function installPatches(): PatchState | undefined {
 		toolProto.render = state.toolRenderWrapper;
 	}
 
-	const bashProto = BashExecutionComponent.prototype as RenderHost;
-	if (!state.originalBashRender && typeof bashProto.render === "function") {
-		state.originalBashRender = bashProto.render;
-		state.bashRenderWrapper = function (this: RenderHost, width: number) {
-			if (state!.enabled && state!.processVisible === false) return [];
-			return state!.originalBashRender!.call(this, width);
-		};
-		bashProto.render = state.bashRenderWrapper;
-	}
+	// 注意：不要包 BashExecutionComponent —— 那是用户自己敲的 `!` / `!!` 命令卡片，
+	// 藏掉它会让用户完全看不到自己的命令输出（agent 的 bash 工具结果走 ToolExecutionComponent）。
 
 	currentPatchState = state;
 	return state;
@@ -428,10 +422,6 @@ function uninstallPatches(state: PatchState): void {
 	if (state.toolRenderWrapper && toolProto.render === state.toolRenderWrapper) {
 		toolProto.render = state.originalToolRender;
 	}
-	const bashProto = BashExecutionComponent.prototype as RenderHost;
-	if (state.bashRenderWrapper && bashProto.render === state.bashRenderWrapper) {
-		bashProto.render = state.originalBashRender;
-	}
 
 	// Keep the Symbol state reusable after `/reload`: the old wrappers were
 	// restored above, so a later install must capture the current originals again.
@@ -445,12 +435,10 @@ function uninstallPatches(state: PatchState): void {
 	state.originalToggleThinking = undefined;
 	state.originalUpdateThinking = undefined;
 	state.originalToolRender = undefined;
-	state.originalBashRender = undefined;
 	state.showStatusWrapper = undefined;
 	state.toggleThinkingWrapper = undefined;
 	state.updateThinkingWrapper = undefined;
 	state.toolRenderWrapper = undefined;
-	state.bashRenderWrapper = undefined;
 	currentPatchState = undefined;
 	trace("uninstall");
 }

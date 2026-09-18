@@ -32,43 +32,6 @@
         }
       },
       {
-        "id": "tokens-1",
-        "type": "tokens",
-        "enabled": true,
-        "options": {}
-      },
-      {
-        "id": "cache-read-1",
-        "type": "cache-read",
-        "enabled": true,
-        "options": {
-          "hideWhenZero": true
-        }
-      },
-      {
-        "id": "cache-write-1",
-        "type": "cache-write",
-        "enabled": true,
-        "options": {
-          "hideWhenZero": true
-        }
-      },
-      {
-        "id": "cache-hit-rate-1",
-        "type": "cache-hit-rate",
-        "enabled": true,
-        "options": {
-          "hideWhenZero": true,
-          "cacheHitSource": "turn"
-        }
-      },
-      {
-        "id": "cost-1",
-        "type": "cost",
-        "enabled": true,
-        "options": {}
-      },
-      {
         "id": "context-bar-1",
         "type": "context-bar",
         "enabled": true,

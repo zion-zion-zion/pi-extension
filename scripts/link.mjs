@@ -44,6 +44,7 @@ const ITEMS = [
 	{ src: "extensions/checkpoint.ts", dest: join(EXT_DIR, "checkpoint.ts") },
 	{ src: "extensions/steer-or-interrupt.ts", dest: join(EXT_DIR, "steer-or-interrupt.ts") },
 	{ src: "extensions/token-speed.ts", dest: join(EXT_DIR, "token-speed.ts") },
+	{ src: "extensions/test-astra.ts", dest: join(EXT_DIR, "test-astra.ts") },
 	// 目录型扩展
 	{ src: "extensions/reload-all", dest: join(EXT_DIR, "reload-all") },
 	{ src: "extensions/codex-usage", dest: join(EXT_DIR, "codex-usage") },

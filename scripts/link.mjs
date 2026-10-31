@@ -38,6 +38,7 @@ const ITEMS = [
 	{ src: "extensions/auto-hide-thinking.ts", dest: join(EXT_DIR, "auto-hide-thinking.ts") },
 	{ src: "extensions/scroll-to-last-prompt.ts", dest: join(EXT_DIR, "scroll-to-last-prompt.ts") },
 	{ src: "extensions/model-filter.ts", dest: join(EXT_DIR, "model-filter.ts") },
+	{ src: "extensions/model-label", dest: join(EXT_DIR, "model-label") },
 	{ src: "extensions/restart.ts", dest: join(EXT_DIR, "restart.ts") },
 	{ src: "extensions/herdr-session-title.ts", dest: join(EXT_DIR, "herdr-session-title.ts") },
 	{ src: "extensions/herdr-yazi-preview.ts", dest: join(EXT_DIR, "herdr-yazi-preview.ts") },
@@ -45,10 +46,12 @@ const ITEMS = [
 	{ src: "extensions/checkpoint.ts", dest: join(EXT_DIR, "checkpoint.ts") },
 	{ src: "extensions/steer-or-interrupt.ts", dest: join(EXT_DIR, "steer-or-interrupt.ts") },
 	{ src: "extensions/token-speed.ts", dest: join(EXT_DIR, "token-speed.ts") },
+	{ src: "extensions/context-usage.ts", dest: join(EXT_DIR, "context-usage.ts") },
 	{ src: "extensions/test-astra.ts", dest: join(EXT_DIR, "test-astra.ts") },
 	// 目录型扩展
 	{ src: "extensions/reload-all", dest: join(EXT_DIR, "reload-all") },
 	{ src: "extensions/codex-usage", dest: join(EXT_DIR, "codex-usage") },
+	{ src: "extensions/magpie-quota", dest: join(EXT_DIR, "magpie-quota") },
 	// 运行时会被扩展改写的配置（写盘必须是 writeFile，不能是「写临时文件 + rename」，
 	// 否则 rename 会把软链替换成真实文件、软链静默失效）
 	{ src: "extensions/pi-footer.json", dest: join(EXT_DIR, "pi-footer.json") },

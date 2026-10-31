@@ -12,16 +12,35 @@
     "colorLevel": "ansi256"
   },
   "extensionStatusRow": {
-    "hiddenKeys": ["codex-usage", "token_speed"],
-    "knownKeys": ["codex-usage", "token_speed"]
+    "hiddenKeys": [
+      "codex-usage",
+      "magpie-quota",
+      "model_label",
+      "token_speed",
+      "mcp",
+      "wechat"
+    ],
+    "knownKeys": [
+      "codex-usage",
+      "magpie-quota",
+      "model_label",
+      "token_speed",
+      "mcp",
+      "wechat"
+    ]
   },
   "lines": [
     [
       {
-        "id": "model-provider-1",
-        "type": "model-provider",
+        "id": "model-label-event",
+        "type": "event",
         "enabled": true,
-        "options": {}
+        "options": {
+          "widgetId": "model_label",
+          "icon": "✦ ",
+          "hideWhenEmpty": true,
+          "fg": "cyan"
+        }
       },
       {
         "id": "thinking-level-1",
@@ -32,70 +51,14 @@
         }
       },
       {
-        "id": "context-bar-1",
-        "type": "context-bar",
+        "id": "context-usage-event",
+        "type": "event",
         "enabled": true,
         "options": {
-          "contextBarMode": "short",
-          "contextConditionalColors": true
-        }
-      },
-      {
-        "id": "context-1",
-        "type": "context",
-        "enabled": true,
-        "options": {
-          "contextConditionalColors": true
-        }
-      }
-    ],
-    [
-      {
-        "id": "git-branch-1",
-        "type": "git-branch",
-        "enabled": true,
-        "options": {
+          "widgetId": "context_usage",
+          "icon": "",
           "hideWhenEmpty": true
         }
-      },
-      {
-        "id": "git-sha-1",
-        "type": "git-sha",
-        "enabled": true,
-        "options": {
-          "hideWhenEmpty": true
-        }
-      },
-      {
-        "id": "git-status-1",
-        "type": "git-status",
-        "enabled": true,
-        "options": {
-          "hideWhenEmpty": true
-        }
-      },
-      {
-        "id": "git-diff-1",
-        "type": "git-diff",
-        "enabled": true,
-        "options": {
-          "gitDiffMode": "compact",
-          "hideWhenEmpty": true
-        }
-      },
-      {
-        "id": "git-ahead-behind-1",
-        "type": "git-ahead-behind",
-        "enabled": true,
-        "options": {
-          "hideWhenEmpty": true
-        }
-      },
-      {
-        "id": "total-time-1",
-        "type": "total-time",
-        "enabled": true,
-        "options": {}
       },
       {
         "id": "event-token-speed-1",
@@ -109,6 +72,22 @@
         }
       },
       {
+        "id": "extension-status-mcp",
+        "type": "external-status",
+        "enabled": true,
+        "options": {
+          "externalStatusKey": "mcp"
+        }
+      },
+      {
+        "id": "extension-status-wechat",
+        "type": "external-status",
+        "enabled": true,
+        "options": {
+          "externalStatusKey": "wechat"
+        }
+      },
+      {
         "id": "codex-usage-event",
         "type": "event",
         "enabled": true,
@@ -116,6 +95,16 @@
           "raw": true,
           "hideWhenEmpty": true,
           "widgetId": "codex-usage"
+        }
+      },
+      {
+        "id": "magpie-quota-event",
+        "type": "event",
+        "enabled": true,
+        "options": {
+          "raw": true,
+          "hideWhenEmpty": true,
+          "widgetId": "magpie-quota"
         }
       }
     ]

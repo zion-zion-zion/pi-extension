@@ -42,6 +42,27 @@ swift build -c release
 
 Phase 0 验证通过后，再加入暖白背景、柔和阴影、focused pane 适配和 `herdr api snapshot`。
 
-## 安全降级
+## 诊断
+
+程序运行时会把状态写入：
+
+```text
+/tmp/herdr-shell.log
+```
+
+如果看不到效果，先确认旧进程已经退出：回到运行它的 pane 按 `Ctrl+C`，再重新构建并启动：
+
+```bash
+cd /Users/jiezhou/Desktop/公司其他/pi-extension/herdr-shell
+swift build -c debug
+.build/debug/herdr-shell
+```
+
+日志中应能看到类似：
+
+```text
+accessibilityTrusted=true
+tracking Ghostty frame=...
+```
 
 找不到 Ghostty、没有辅助功能权限、窗口不可见或 frame 无效时，程序会隐藏 overlay 并继续等待，不会影响 Ghostty 或 herdr。

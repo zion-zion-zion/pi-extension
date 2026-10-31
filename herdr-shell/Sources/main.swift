@@ -6,6 +6,21 @@ import Foundation
 private let ghosttyBundleIdentifier = "com.mitchellh.ghostty"
 private let pollInterval: TimeInterval = 0.20
 private let overlayInset: CGFloat = 8
+private let logURL = URL(fileURLWithPath: "/tmp/herdr-shell.log")
+
+@discardableResult
+private func log(_ message: String) -> String {
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
+    FileHandle.standardError.write(Data(line.utf8))
+    if let handle = try? FileHandle(forWritingTo: logURL) {
+        handle.seekToEndOfFile()
+        handle.write(Data(line.utf8))
+        try? handle.close()
+    } else {
+        try? Data(line.utf8).write(to: logURL)
+    }
+    return message
+}
 
 final class GhosttyWindowLocator {
     func runningApplication() -> NSRunningApplication? {
@@ -15,7 +30,10 @@ final class GhosttyWindowLocator {
     }
 
     func windowElement() -> AXUIElement? {
-        guard let application = runningApplication() else { return nil }
+        guard let application = runningApplication() else {
+            log("Ghostty is not running")
+            return nil
+        }
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
@@ -23,9 +41,14 @@ final class GhosttyWindowLocator {
             kAXWindowsAttribute as CFString,
             &value
         )
-        guard result == .success,
-              let windows = value as? [AXUIElement]
-        else { return nil }
+        guard result == .success else {
+            log("Could not read Ghostty windows; AX error=\(result.rawValue). Is this executable trusted in Accessibilité?")
+            return nil
+        }
+        guard let windows = value as? [AXUIElement] else {
+            log("Ghostty returned no AX windows")
+            return nil
+        }
 
         return windows.first(where: isUsableWindow)
     }
@@ -34,7 +57,18 @@ final class GhosttyWindowLocator {
         guard let position = point(of: window, attribute: kAXPositionAttribute),
               let size = size(of: window, attribute: kAXSizeAttribute)
         else { return nil }
-        return CGRect(origin: position, size: size)
+        // Accessibility uses a top-left global origin; AppKit window frames use
+        // a bottom-left global origin. Phase 0 handles the display containing
+        // the main screen and falls back to the raw coordinates if unavailable.
+        let axFrame = CGRect(origin: position, size: size)
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(axFrame) })
+        else { return axFrame }
+        return CGRect(
+            x: axFrame.minX,
+            y: screen.frame.maxY - axFrame.maxY,
+            width: axFrame.width,
+            height: axFrame.height
+        )
     }
 
     func isFrontmostAndVisible(_ window: AXUIElement) -> Bool {
@@ -114,10 +148,17 @@ final class ShellView: NSView {
 
         context.saveGState()
         context.addPath(path)
+        // Phase 0 uses a deliberately visible purple stroke so window tracking
+        // can be verified on both Ghostty's light and dark themes.
         context.setStrokeColor(
-            NSColor(calibratedWhite: 1, alpha: isGhosttyActive ? 0.20 : 0.10).cgColor
+            NSColor(
+                calibratedRed: 0.46,
+                green: 0.40,
+                blue: 0.78,
+                alpha: isGhosttyActive ? 0.78 : 0.36
+            ).cgColor
         )
-        context.setLineWidth(1)
+        context.setLineWidth(2)
         context.strokePath()
         context.restoreGState()
     }
@@ -138,7 +179,9 @@ final class OverlayPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         level = .floating
         hidesOnDeactivate = false
-        contentView = ShellView(frame: .zero)
+        let view = ShellView(frame: .zero)
+        view.autoresizingMask = [.width, .height]
+        contentView = view
     }
 
     override var canBecomeKey: Bool { false }
@@ -152,6 +195,10 @@ final class ShellController {
     private var trackedWindow: AXUIElement?
 
     func start() {
+        let trusted = AXIsProcessTrustedWithOptions(
+            [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        )
+        log("started; accessibilityTrusted=\(trusted)")
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             self?.synchronize()
         }
@@ -171,6 +218,7 @@ final class ShellController {
         trackedWindow = window
         let overlayFrame = frame.insetBy(dx: -overlayInset, dy: -overlayInset)
         if panel.frame != overlayFrame {
+            log("tracking Ghostty frame=\(frame.debugDescription), overlay=\(overlayFrame.debugDescription)")
             panel.setFrame(overlayFrame, display: true)
         }
         if panel.isVisible == false {

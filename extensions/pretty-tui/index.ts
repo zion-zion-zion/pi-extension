@@ -23,7 +23,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   type Component,
+  backgroundAnsi,
+  colorToRgb,
   Markdown,
+  mixColors,
+  rgbColor,
   stripTerminalSequences,
   truncateToWidth,
   TuiAltScreen,
@@ -2233,38 +2237,35 @@ export default function prettyTui(pi: ExtensionAPI) {
           if (nextTokenType && nextTokenType !== "space") lines.push("");
           return lines;
         };
-        const headingStyle = (text: string) => this.theme.heading(text);
-        const foregroundLuminance = (styled: string): number | undefined => {
-          const trueColor = /\x1b\[38;2;(\d+);(\d+);(\d+)m/.exec(styled);
-          if (!trueColor) return undefined;
-          const [, red, green, blue] = trueColor.map(Number);
-          return red * 0.2126 + green * 0.7152 + blue * 0.0722;
-        };
-        const defaultLuminance = foregroundLuminance(this.applyDefaultStyle("M"));
-        const headingLuminance = foregroundLuminance(headingStyle("M"));
-        const darkTheme =
-          defaultLuminance !== undefined
-            ? defaultLuminance >= 128
-            : (headingLuminance ?? 255) >= 160;
-        const whiteStyle = (text: string) => `\x1b[97m${text}\x1b[39m`;
-        const titleStyle =
-          level === 1 || level === 3
-            ? (text: string) => headingStyle(this.theme.bold(this.theme.underline(text)))
-            : level === 2
-              ? (text: string) =>
-                  (darkTheme ? whiteStyle : headingStyle)(
-                    this.theme.bold(this.theme.underline(text)),
-                  )
-              : level === 4
-                ? (text: string) => headingStyle(this.theme.bold(text))
-                : level === 5
-                  ? headingStyle
-                  : (text: string) => this.theme.quote(this.theme.italic(text));
-        const titleContext = {
-          applyText: titleStyle,
-          stylePrefix: this.getStylePrefix(titleStyle),
-        };
-        const title = this.renderInlineTokens(token.tokens || [], titleContext);
+        // 标题里的内联代码与链接各带一套颜色，一行里三四种色看着很杂；
+        // 统一压成单一色阶，层级只靠结构（框、竖条、字重）区分。
+        const palette = currentExtensionUi?.theme;
+        const tone = (name: "text" | "muted" | "accent" | "borderMuted", text: string): string =>
+          typeof palette?.fg === "function" ? palette.fg(name, text) : text;
+        const strong = (text: string) => tone("text", this.theme.bold(text));
+
+        // 极淡紫底：取主题重音色，向底色混入 90%，饱和度降到几乎看不出颜色。
+        // 颜色运算走 pi-tui 的 mixColors/backgroundAnsi，它们会按终端能力降级；
+        // 拿不到具体色值时干脆不上底，宁缺毋滥。
+        const bandColor = (() => {
+          const accent = palette?.colors?.accent;
+          if (!accent) return undefined;
+          const dark = palette?.appearance === "dark";
+          const back = dark ? rgbColor(16, 16, 20) : rgbColor(255, 255, 255);
+          return mixColors(accent, back, dark ? 0.84 : 0.9, "srgb");
+        })();
+        const bandAnsi = bandColor
+          ? backgroundAnsi(bandColor, palette?.getColorMode?.() ?? "truecolor")
+          : undefined;
+        const band = (text: string): string =>
+          bandAnsi ? `${bandAnsi}${text}\x1b[49m` : text;
+        /** 底色只包住文字本身，右侧留一格呼吸，不铺满整行。 */
+        const banded = (text: string): string =>
+          band(`${text} `);
+        const titleContext = { applyText: (text: string) => text, stylePrefix: "" };
+        const title = stripTerminalSequences(
+          this.renderInlineTokens(token.tokens || [], titleContext),
+        );
 
         if (level === 1 && maxWidth >= 6) {
           const maximumInnerWidth = maxWidth - 4;
@@ -2274,27 +2275,41 @@ export default function prettyTui(pi: ExtensionAPI) {
             ...titleLines.map((line: string) => visibleWidth(line)),
           );
           const frameWidth = Math.min(maxWidth, innerWidth + 4);
-          const frameStyle = (text: string) => headingStyle(this.theme.bold(text));
+          const frameStyle = (text: string) => tone("borderMuted", text);
+          // 一级标题不上底色：pi 的 markdown 把背景留到 padding 阶段铺，
+          // 包住的是整块的外边距，底色会比框大一圈，从 renderToken 里收不住。
           const lines = [
-            frameStyle(`╔${"═".repeat(frameWidth - 2)}╗`),
+            frameStyle(`╭${"─".repeat(frameWidth - 2)}╮`),
             ...titleLines.map((line: string) => {
               const padding = " ".repeat(Math.max(0, innerWidth - visibleWidth(line)));
-              return frameStyle("║ ") + line + frameStyle(`${padding} ║`);
+              return frameStyle("│ ") + strong(line) + frameStyle(`${padding} │`);
             }),
-            frameStyle(`╚${"═".repeat(frameWidth - 2)}╝`),
+            frameStyle(`╰${"─".repeat(frameWidth - 2)}╯`),
           ];
           return addHeadingSpacing(lines);
         }
 
         if (level === 2) {
-          // Reverse only the rendered title cells: the theme's heading color
-          // becomes a compact, content-width background label with no frame.
-          const lines = wrapTextWithAnsi(title, maxWidth).map((line: string) =>
-            darkTheme
-              ? `\x1b[48;5;94m${line}\x1b[49m`
-              : `\x1b[107m\x1b[7m${line}\x1b[27m\x1b[49m`
+          // 左侧一条重音色竖线 + 正文色粗体，整行铺极淡紫底。
+          const bar = tone("accent", "▍");
+          const lines = wrapTextWithAnsi(title, Math.max(1, maxWidth - 2)).map(
+            (line: string) => banded(`${bar} ${strong(line)}`),
           );
           return addHeadingSpacing(lines);
+        }
+
+        if (level === 3) {
+          return addHeadingSpacing(
+            wrapTextWithAnsi(strong(title), maxWidth).map((line: string) => banded(line)),
+          );
+        }
+
+        if (level === 4) {
+          return addHeadingSpacing(
+            wrapTextWithAnsi(tone("muted", this.theme.bold(title)), maxWidth).map(
+              (line: string) => banded(line),
+            ),
+          );
         }
 
         if (level === 5 && maxWidth >= 8) {
@@ -2304,14 +2319,20 @@ export default function prettyTui(pi: ExtensionAPI) {
             1,
             maxWidth - visibleWidth(prefix) - visibleWidth(suffix),
           );
-          const wrapped = wrapTextWithAnsi(title, contentWidth);
+          const wrapped = wrapTextWithAnsi(strong(title), contentWidth);
           const lines = wrapped.map((line: string, index: number) => {
-            const left = index === 0 ? this.theme.heading(prefix) : " ".repeat(visibleWidth(prefix));
-            const right = index === wrapped.length - 1 ? this.theme.heading(suffix) : "";
+            const left = index === 0
+              ? tone("borderMuted", prefix)
+              : " ".repeat(visibleWidth(prefix));
+            const right = index === wrapped.length - 1 ? tone("borderMuted", suffix) : "";
             return left + line + right;
           });
           return addHeadingSpacing(lines);
         }
+
+        return addHeadingSpacing(
+          wrapTextWithAnsi(tone("muted", this.theme.italic(title)), maxWidth),
+        );
 
         return addHeadingSpacing(wrapTextWithAnsi(title, maxWidth));
       }

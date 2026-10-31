@@ -15,8 +15,8 @@ pane_gaps = true
 window_title = "{terminal_title}"
 
 [ui.sidebar.agents]
-# 每个 Agent 条目之间留一行，降低列表的拥挤感。
-row_gap = 1
+# 使用紧凑列表，尽量让更多会话同时可见。
+row_gap = 0
 # 保持两行：第 2 行 = agent 名 + pi 会话名。
 # $pi_session 由 extensions/herdr-session-title.ts 上报（pane token）。
 # 不换行；超宽由 herdr 自己截断。

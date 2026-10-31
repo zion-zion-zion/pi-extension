@@ -40,6 +40,7 @@ const ITEMS = [
 	{ src: "extensions/model-filter.ts", dest: join(EXT_DIR, "model-filter.ts") },
 	{ src: "extensions/restart.ts", dest: join(EXT_DIR, "restart.ts") },
 	{ src: "extensions/herdr-session-title.ts", dest: join(EXT_DIR, "herdr-session-title.ts") },
+	{ src: "extensions/herdr-yazi-preview.ts", dest: join(EXT_DIR, "herdr-yazi-preview.ts") },
 	{ src: "extensions/commits.ts", dest: join(EXT_DIR, "commits.ts") },
 	{ src: "extensions/checkpoint.ts", dest: join(EXT_DIR, "checkpoint.ts") },
 	{ src: "extensions/steer-or-interrupt.ts", dest: join(EXT_DIR, "steer-or-interrupt.ts") },

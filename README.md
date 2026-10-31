@@ -12,6 +12,7 @@
 | [`extensions/steer-or-interrupt.ts`](extensions/steer-or-interrupt.ts) | Opt+Enter：没有进行中的 tool 时立刻中断当前回答并发送；有挂起的 tool 时走内置 steering |
 | [`extensions/auto-hide-thinking.ts`](extensions/auto-hide-thinking.ts) | Herdr 下联动显示/隐藏 thinking 与完整工具块：生成中可见，整轮结束后收起；`Ctrl+T` 恢复两者，`Ctrl+O` 仍只控制工具展开。只在 Herdr pane 生效 |
 | [`extensions/scroll-to-last-prompt.ts`](extensions/scroll-to-last-prompt.ts) | 每轮回复结束后，自动把「我上一条消息」的第一行顶到屏幕顶部，方便从头顺序读本轮回复；生成中手动上翻过则不打扰，下次发送消息自动恢复跟随。只在 fullscreen TUI 生效 |
+| [`extensions/herdr-yazi-preview.ts`](extensions/herdr-yazi-preview.ts) | macOS Herdr 内按 `Ctrl+Alt+Y` 或运行 `/yazi-preview`，在右侧 Yazi 中预览剪贴板里的文件或目录路径；按 `q` 退出并关闭预览 pane。需安装 Yazi |
 | [`extensions/herdr-session-title.ts`](extensions/herdr-session-title.ts) | 把 pi 会话名作为 pane token（`pi_session`）报给 Herdr，供侧边栏 Agent 行显示；`session_start` / `session_info_changed` 时同步，`/name` 改名立刻跟着变。只在 Herdr pane 生效 |
 | [`extensions/reload-all/`](extensions/reload-all/) | `/reload-all` 把 Herdr 里所有空闲的 pi 窗口重载一遍；`/restart-all` 把它们**重启**一遍（换进程、各自回到自己的对话）。两者都跳过忙碌 / 输入框里有草稿的窗口 |
 | [`extensions/restart.ts`](extensions/restart.ts) | `/restart` — 重启**本窗口**（换进程，回到同一个对话）。`/reload` 只换扩展代码、不换进程，清不掉内存里被污染的状态时用它。只在 Herdr pane 生效 |

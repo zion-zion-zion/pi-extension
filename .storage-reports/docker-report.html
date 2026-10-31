@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Docker 存储分析</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#1d2129; --sub:#86909c;
+    --line:#e5e6eb; --green:#00b42a; --yellow:#ff7d00; --red:#f53f3f;
+    --green-bg:#e8ffea; --yellow-bg:#fff7e8; --red-bg:#ffece8;
+    --accent:#165dff; --accent-bg:#e8f3ff;
+    --radius:14px; --shadow:0 1px 3px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.04);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"SF Pro SC","PingFang SC","Noto Sans CJK SC","Microsoft YaHei",system-ui,sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.6;padding:32px 20px 80px;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1040px;margin:0 auto}
+  header{margin-bottom:28px}
+  h1{font-size:26px;font-weight:700;letter-spacing:-.5px}
+  .meta{color:var(--sub);font-size:13px;margin-top:6px}
+
+  .overview{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+    padding:24px;margin-bottom:24px}
+  .bar{height:16px;border-radius:8px;background:var(--line);overflow:hidden;display:flex;margin:16px 0 12px}
+  .bar i{display:block;height:100%}
+  .bar .used{background:linear-gradient(90deg,#165dff,#4080ff)}
+  .bar i.seg-green{background:var(--green)}
+  .bar i.seg-yellow{background:var(--yellow)}
+  .bar i.seg-red{background:var(--red)}
+  .bar i.seg-blue{background:var(--accent)}
+  .bar i+i{border-left:1.5px solid #fff}
+  .lead{font-size:14px;line-height:1.7;margin-bottom:12px}
+  .stats{display:flex;flex-wrap:wrap;gap:24px}
+  .stat .k{font-size:12px;color:var(--sub)}
+  .stat .v{font-size:18px;font-weight:600;font-variant-numeric:tabular-nums}
+  .sysgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+    gap:10px 24px;margin-top:20px;padding-top:18px;border-top:1px solid var(--line)}
+  .sysgrid div{font-size:13px}
+  .sysgrid span{color:var(--sub)}
+  .pills{margin:14px 0 0}
+  .bar-label{font-size:12px;color:var(--sub);margin-bottom:4px}
+  .other-disks{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+  .other-disks .label{font-size:12px;color:var(--sub);font-weight:600;margin-bottom:8px}
+  .odisk{display:flex;align-items:center;gap:12px;margin:6px 0;font-size:13px}
+  .odisk-name{min-width:80px;font-weight:600;font-variant-numeric:tabular-nums;font-family:"SF Mono",ui-monospace,monospace;font-size:12px}
+  .obar{flex:1;height:10px;border-radius:6px;background:var(--line);overflow:hidden}
+  .obar i{display:block;height:100%;background:linear-gradient(90deg,#165dff,#4080ff)}
+  .odisk-num{color:var(--sub);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+  .sec{margin-bottom:28px}
+  .sec h2{font-size:18px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .sec h2 .count{font-size:13px;color:var(--sub);font-weight:500}
+  .sec-actions{margin-left:auto;display:flex;align-items:center;gap:8px}
+  .sec-actions .del-btn{padding:5px 12px;font-size:12px}
+  .sec-status{font-size:12px}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);
+    border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+  th,td{text-align:left;padding:12px 14px;font-size:13px;border-bottom:1px solid var(--line)}
+  th{background:#fafbfc;color:var(--sub);font-weight:600;font-size:12px;white-space:nowrap}
+  td.type{white-space:nowrap}
+  .table-scroll{overflow-x:auto;border-radius:var(--radius);box-shadow:var(--shadow)}
+  .table-scroll table{min-width:720px;box-shadow:none}
+  tr:last-child td{border-bottom:none}
+  td.size{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+  td.path{font-family:"SF Mono",ui-monospace,monospace;font-size:12px;color:var(--sub);word-break:break-all}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%}
+  .dot.green{background:var(--green)} .dot.yellow{background:var(--yellow)} .dot.red{background:var(--red)} .dot.blue{background:var(--accent)}
+
+  .item{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+    margin-bottom:12px;border-left:4px solid var(--line);overflow:hidden}
+  .item.green{border-left-color:var(--green)}
+  .item.yellow{border-left-color:var(--yellow)}
+  .item.red{border-left-color:var(--red)}
+  .item-head{display:flex;align-items:center;gap:12px;padding:16px 18px;cursor:pointer;user-select:none}
+  .item-head:hover{background:#fafbfc}
+  .item-name{font-weight:600;font-size:15px;flex:1}
+  .item-badge{font-size:12px;font-weight:600;color:var(--green);background:var(--green-bg);
+    padding:2px 10px;border-radius:20px;white-space:nowrap}
+  .item-badge:empty{display:none}
+  .item.cleaned .item-name{text-decoration:line-through;color:var(--sub);font-weight:500}
+  .item.cleaned .item-size{color:var(--sub)}
+  .item.cleaned{opacity:.85}
+  .item-size{font-weight:700;font-variant-numeric:tabular-nums;color:var(--accent)}
+  .chev{color:var(--sub);transition:transform .2s;font-size:12px}
+  .item.open .chev{transform:rotate(90deg)}
+  .item-body{display:none;padding:0 18px 18px;font-size:14px}
+  .item.open .item-body{display:block}
+  .item-path{font-family:"SF Mono",ui-monospace,monospace;font-size:12px;color:var(--sub);
+    word-break:break-all;margin-bottom:12px;padding:8px 10px;background:#fafbfc;border-radius:8px}
+  .field{margin:10px 0}
+  .field .label{font-size:12px;color:var(--sub);font-weight:600;margin-bottom:3px}
+  .tag{display:inline-block;background:var(--accent-bg);color:var(--accent);
+    font-size:12px;padding:2px 8px;border-radius:6px;margin:2px 4px 2px 0}
+  .risk{background:var(--red-bg);color:var(--red);padding:8px 12px;border-radius:8px;
+    font-size:13px;margin-top:10px}
+
+  .cmd{position:relative;background:#1d2129;color:#e5e6eb;border-radius:10px;
+    padding:14px 14px;margin:8px 0;font-family:"SF Mono",ui-monospace,monospace;
+    font-size:12.5px;line-height:1.7;overflow-x:auto;white-space:pre}
+  .cmd .copy{position:absolute;top:8px;right:8px;background:#2d3138;color:#c9cdd4;
+    border:none;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;
+    font-family:inherit}
+  .cmd .copy:hover{background:#3d424a;color:#fff}
+  .cmd .copy.done{background:var(--green);color:#fff}
+  .cmd-label{font-size:11px;color:var(--sub);margin:10px 0 2px}
+
+  .del-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px}
+  .del-btn{border:none;border-radius:8px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer}
+  .del-btn.trash{background:var(--accent-bg);color:var(--accent)}
+  .del-btn.trash:hover{background:#d4e4ff}
+  .del-btn.danger{background:var(--red-bg);color:var(--red)}
+  .del-btn.danger:hover{background:#ffd4cc}
+  .del-btn.open{background:#f2f3f5;color:var(--ink)}
+  .del-btn.open:hover{background:#e5e6eb}
+  .del-btn:disabled{opacity:.45;cursor:default}
+  .del-status{font-size:13px}
+  .del-status.ok{color:var(--green);font-weight:600}
+  .del-status.err{color:var(--red)}
+  .del-note{font-size:12px;color:var(--sub);line-height:1.6;margin-top:8px}
+  .del-note b{color:var(--ink)}
+
+  .summary{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:24px}
+  .summary h3{font-size:15px;margin:18px 0 8px} .summary h3:first-child{margin-top:0}
+  .summary ul{padding-left:20px} .summary li{margin:4px 0;font-size:14px}
+  .pill{display:inline-flex;align-items:center;gap:6px;background:#fafbfc;border:1px solid var(--line);
+    border-radius:20px;padding:6px 14px;font-size:13px;margin:4px 8px 4px 0;font-weight:600}
+  .pill b{font-variant-numeric:tabular-nums}
+
+  .note{font-size:12px;color:var(--sub);margin-top:8px}
+  .denied{background:var(--yellow-bg);border:1px solid #ffd591;border-radius:10px;
+    padding:12px 14px;font-size:13px;margin-top:12px}
+  footer{text-align:center;color:var(--sub);font-size:12px;margin-top:40px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Docker 存储分析</h1>
+    <div class="meta" id="meta"></div>
+  </header>
+  <div id="app"></div>
+  <footer>Docker 专项 · 只读分析 · 命令在页面里复制后自行执行，本页不直接删除</footer>
+</div>
+
+<script>
+const DATA = {"generated_at": "2026-09-22 16:00", "scan_seconds": 1, "system": {"os": "Docker Desktop", "build": "overlayfs / buildx", "arch": "linux/arm64 容器", "user": "jiezhou", "home": "/Users/jiezhou/Library/Containers/com.docker.docker", "filesystem": "Docker.raw 稀疏镜像", "disk_name": "Docker 虚拟磁盘", "disk_total": "58.8 GB", "disk_used": "58.8 GB", "disk_free": "0 GB", "purgeable": "", "disks": []}, "top5": [{"rank": 1, "tier": "green", "size": "约 23.4 GB", "type": "构建缓存", "name": "BuildKit 构建缓存", "path": "docker builder", "note": "118 条，独占层 20.9 GB。最近使用也是 12 天前"}, {"rank": 2, "tier": "yellow", "size": "约 10.7 GB", "type": "构建器状态", "name": "investment-wise-builder 状态卷", "path": "buildx_buildkit_investment-wise-builder0_state", "note": "builder 容器已运行 12 天。builder prune 不会删这个卷"}, {"rank": 3, "tier": "red", "size": "约 7.4 GB", "type": "运行中镜像", "name": "正在跑的 8 个镜像", "path": "investment / pandaprobe / buildkit", "note": "标签大小相加；层有共享，实际小于此数"}, {"rank": 4, "tier": "green", "size": "约 2.7 GB", "type": "未使用镜像", "name": "没有任何容器的 7 个镜像", "path": "docker image", "note": "docker system df 只把其中 1.48 GB 算成可回收，因为层被共享"}, {"rank": 5, "tier": "yellow", "size": "约 0.9 GB", "type": "已停止项目", "name": "local_dev 的 postgres 和 minio", "path": "/Users/jiezhou/Desktop/zhonghaitousample/deploy/local_dev", "note": "容器 12 天前以退出码 255 停止，数据卷约 68 MB"}], "green": [{"name": "全部构建缓存", "path": "docker builder prune", "size_estimate": "约 23.4 GB", "kill_processes": [], "commands": [{"label": "先预览，不删除", "cmd": "docker builder prune --dry-run"}, {"label": "确认后删除全部构建缓存", "cmd": "docker builder prune -af"}]}, {"name": "没有任何容器的镜像", "path": "7 个镜像，标签大小合计约 2.7 GB，去重可回收约 1.5 GB", "size_estimate": "约 1.5 GB", "kill_processes": [], "commands": [{"label": "只删这 7 个，不碰正在使用的镜像", "cmd": "docker rmi \\\n  postgres:16 \\\n  01ai-registry.cn-shanghai.cr.aliyuncs.com/01-ai/investment:postgres-16.9-bookworm \\\n  zhonghaitou-backend:local \\\n  moby/buildkit:buildx-stable-1 \\\n  node:20-bookworm-slim \\\n  python:3.12-slim \\\n  dockerignore-probe:test"}]}], "yellow": [{"name": "investment-wise-builder 及其状态卷", "path": "buildx_buildkit_investment-wise-builder0", "size": "约 10.7 GB", "content_profile": "2026-08-12 创建的 docker-container 驱动 builder，容器已连续运行 12 天。状态卷 buildx_buildkit_investment-wise-builder0_state 占 10.71 GB。default 和 desktop-linux 两个 builder 还在，删掉这一个不影响普通 docker build。", "why_manual": "它是你主动建的命名 builder。如果 investment 的构建脚本写死了 --builder investment-wise-builder，删掉后下次构建会报找不到 builder。", "disposal": "先在 investment 目录搜一遍有没有写死这个名字。没有的话：docker buildx rm investment-wise-builder。这条会停容器并连状态卷一起删。不要只 docker volume rm，卷还被运行中的容器挂着。", "risk": "删的是构建缓存，不是 investment 的 postgres / rustfs 数据。下次用这个 builder 会重新建立缓存。", "open_note": "这是 Docker 卷，不在访达里。按钮只能打开 Docker 容器目录，真正删除要用上面的命令。"}, {"name": "local_dev：已停止的 postgres 和 minio", "path": "/Users/jiezhou/Desktop/zhonghaitousample/deploy/local_dev", "size": "约 0.9 GB 镜像 + 68 MB 数据", "content_profile": "local_dev-postgres-1 和 local_dev-minio-1 在 12 天前以退出码 255 停止。镜像是 postgres:16.9（719 MB）和 minio:latest（228 MB）。数据卷 local_dev_postgres_data 67.7 MB，local_dev_minio_data 不到 1 MB。项目目录还在。", "why_manual": "退出码 255 是被 Docker Desktop 重启打断，不代表项目废弃。68 MB 是本地开发库，里面可能有你造的数据。", "disposal": "还要这个本地环境：在该目录 docker compose up -d。确定不要了：docker compose down -v，会删容器和这两个数据卷，然后再 docker rmi 对应镜像。", "risk": "down -v 会删 local_dev 的数据库。不会波及 investment 和 pandaprobe。", "open_note": "打开的是 compose 项目目录，方便确认这个本地环境还用不用。"}, {"name": "已成功退出的一次性初始化容器", "path": "investment-rustfs-volume-init-1", "size": "约 4 kB", "content_profile": "5 周前退出码 0，和正在运行的 investment-rustfs-1 共用同一镜像、同一组 rustfs 卷。", "why_manual": "本身不占空间。它多半是 compose 的 init 容器，下次 up 还会出现。", "disposal": "可以 docker rm investment-rustfs-volume-init-1。不要加 -v，卷还被运行中的 rustfs 用着。", "risk": "只删容器记录。误加 -v 可能碰到共享卷，所以不要加。", "open_note": "没有对应的宿主机项目文件需要查看。"}], "red": [{"name": "正在运行的两套业务栈", "path": "/Users/jiezhou/Desktop/InvestWise2", "size": "镜像标签约 7.4 GB，数据卷约 194 MB", "why_keep": "investment 的 postgres、rustfs 已 healthy 运行 12 天。pandaprobe 的 app、worker、beat、redis 也在跑。数据卷都很小：postgres 132 MB，rustfs 4×15 MB，redis 可忽略。", "indirect_release": "空间不在数据里。pandaprobe-frontend 已 unhealthy 12 天，可以单独看日志，但不要为此 docker compose down。", "auto_reclaim": "不会被 docker system prune 收走", "app_paths": ["/Users/jiezhou/Desktop/InvestWise2/investment", "/Users/jiezhou/Desktop/InvestWise2/pandaprobe"]}, {"name": "Docker.raw 虚拟磁盘", "path": "/Users/jiezhou/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw", "size": "标称 228 GB 的稀疏文件", "why_keep": "这是整块虚拟磁盘。删掉等于清空全部镜像、容器和卷。回收缓存之后，文件标称大小通常不变，实际占的块会由 Docker Desktop 慢慢交还。", "indirect_release": "先做绿灯的 builder prune。若访达里占用仍不下降，重启 Docker Desktop，让它整理稀疏文件。不要在访达里删除这个文件。", "auto_reclaim": "不会", "app_paths": ["/Applications/Docker.app"]}, {"name": "23 个 0 字节悬空卷", "path": "docker volume ls -f dangling=true", "size": "0 B，另有一个 48.6 MB 的未挂载卷", "why_keep": "docker volume prune 能删的几乎是空卷，唯一有数据的是 local_deploy_postgres_data（48.6 MB，0 个容器挂载）。收益相对命令的误伤面不值。", "indirect_release": "如果确认没有名为 local_deploy 的环境要留，只删那一个：docker volume rm local_deploy_postgres_data。不要跑不带名字的 volume prune。", "auto_reclaim": "不会", "app_paths": []}], "denied": [], "summary": {"overview": "Docker 内部约 58.8 GB 有账可查，其中构建缓存 23.4 GB 可以直接清，命名 builder 的状态卷还有 10.7 GB 需要你确认后删；正在跑的 investment 和 pandaprobe 数据卷加起来不到 200 MB，不是空间来源。", "tier_stats": {"green": "约 24.9 GB", "yellow": "约 11.6 GB", "red": "约 22.3 GB"}, "priority": ["先跑 docker builder prune --dry-run 看名单，再 docker builder prune -af，大约 23.4 GB。", "确认 investment 没有写死 investment-wise-builder 后，docker buildx rm investment-wise-builder，另约 10.7 GB。", "镜像只删列出来的 7 个。不要 docker image prune -a，也不要 docker volume prune。"], "long_term": ["构建缓存是重复堆积：3.6 GB 的层有 3 份，750 MB 左右的层有 6 份。以后用 docker builder prune --filter until=168h 清一周以前的。", "investment-wise-builder 是 docker-container 驱动，缓存放在独立卷里，普通 prune 清不到。不用多平台构建就不要留这种 builder。", "pandaprobe-frontend 已 unhealthy 12 天：docker logs --tail 80 pandaprobe-frontend。这是健康问题，不是磁盘问题。", "回收后 Docker.raw 的标称大小仍会显示 228 GB。看真实占用用磁盘工具或重启 Docker Desktop，不要按 ls 的 228G 判断。"]}};
+const DELETE = null;
+
+// Detect OS for terminology
+const OS_STR = (DATA.system && (DATA.system.os||'')).toLowerCase();
+const IS_WIN = OS_STR.includes('win');
+const IS_LINUX = OS_STR.includes('linux') || (!IS_WIN && !OS_STR.includes('mac'));
+const FM = IS_WIN ? '资源管理器' : IS_LINUX ? '文件管理器' : '访达';
+const TRASH = IS_WIN ? '回收站' : IS_LINUX ? '回收站' : '废纸篓';
+
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const cleanSize = s => String(s==null?'':s).replace(/[（(]\s*估算[^）)]*[）)]/g, '').trim();
+
+function copyBtn(text){
+  return `<button class="copy" data-cmd="${btoa(unescape(encodeURIComponent(text)))}">复制</button>`;
+}
+
+function cmdBlock(c){
+  const label = c.label ? `<div class="cmd-label">${esc(c.label)}</div>` : '';
+  return `${label}<div class="cmd">${copyBtn(c.cmd)}${esc(c.cmd)}</div>`;
+}
+
+function parseGB(str){
+  if(!str) return 0;
+  const m=String(str).match(/([\d.]+)\s*(TB|GB|MB)?/i);
+  if(!m) return 0;
+  let v=parseFloat(m[1]); const u=(m[2]||'GB').toUpperCase();
+  if(u==='TB') v*=1024; else if(u==='MB') v/=1024;
+  return v;
+}
+
+function renderSystem(s, sm){
+  document.getElementById('meta').textContent =
+    `生成于 ${DATA.generated_at}　·　扫描耗时 ${DATA.scan_seconds||'?'}s`;
+  const total = parseGB(s.disk_total) || 1;
+  const used = parseGB(s.disk_used);
+  const ts = sm && sm.tier_stats;
+  const g = ts ? parseGB(ts.green) : 0;
+  const y = ts ? parseGB(ts.yellow) : 0;
+  const r = ts ? parseGB(ts.red) : 0;
+  const other = Math.max(0, used - g - y - r);
+  let bar;
+  if(g > 0 || y > 0 || r > 0){
+    const seg=(v,cls,label)=> v>0?`<i class="${cls}" style="width:${(v/total*100).toFixed(2)}%" title="${label}：约 ${v.toFixed(1)} GB"></i>`:'';
+    bar = seg(g,'seg-green','可自动清')+seg(y,'seg-yellow','需手动')+seg(r,'seg-red','谨慎清理')+seg(other,'seg-blue','系统及其他');
+  } else {
+    bar = `<i class="used" style="width:${(used/total*100).toFixed(2)}%"></i>`;
+  }
+  const fmtGB = v => v>0?`约 ${v.toFixed(1)} GB`:'-';
+  const otherPill = other>0?`<span class="pill"><span class="dot blue"></span>系统及其他 <b>${fmtGB(other)}</b></span>`:'';
+  let pills='';
+  if(sm && sm.tier_stats){
+    pills=`<div class="pills">
+      <span class="pill"><span class="dot green"></span>可自动清 <b>${fmtGB(g)}</b></span>
+      <span class="pill"><span class="dot yellow"></span>需手动 <b>${fmtGB(y)}</b></span>
+      <span class="pill"><span class="dot red"></span>谨慎清理 <b>${fmtGB(r)}</b></span>
+      ${otherPill}
+    </div>`;
+  }
+  const allDisks = s.disks || [];
+  const others = allDisks.filter(d => d.name !== s.disk_name);
+  const barLabel = allDisks.length > 1
+    ? `<div class="bar-label">系统盘 ${esc(s.disk_name||'')} · 已用部分按清理分级着色</div>` : '';
+  const otherDisksBlock = others.length ? `<div class="other-disks">
+      <div class="label">其他挂载点</div>
+      ${others.map(d=>{
+        const u=parseGB(d.used), t=parseGB(d.total)||1;
+        const pct=Math.min(100, u/t*100).toFixed(1);
+        return `<div class="odisk"><span class="odisk-name">${esc(d.name)}</span>
+          <div class="obar"><i style="width:${pct}%"></i></div>
+          <span class="odisk-num">${esc(d.used)} / ${esc(d.total)}</span></div>`;
+      }).join('')}</div>` : '';
+  return `<div class="overview">
+    <div class="stats">
+      <div class="stat"><div class="k">总容量</div><div class="v">${esc(s.disk_total)}</div></div>
+      <div class="stat"><div class="k">已用</div><div class="v">${esc(s.disk_used)}</div></div>
+      <div class="stat"><div class="k">可用</div><div class="v">${esc(s.disk_free)}</div></div>
+      ${s.purgeable?`<div class="stat"><div class="k">可清除(系统)</div><div class="v">${esc(s.purgeable)}</div></div>`:''}
+    </div>
+    ${barLabel}
+    <div class="bar">${bar}</div>
+    ${pills}
+    ${otherDisksBlock}
+    <div class="sysgrid">
+      <div><span>系统　</span>${esc(s.os)} (${esc(s.build)})</div>
+      <div><span>架构　</span>${esc(s.arch)}</div>
+      <div><span>文件系统　</span>${esc(s.filesystem)}</div>
+      <div><span>用户　</span>${esc(s.user)}</div>
+      <div><span>主目录　</span>${esc(s.home)}</div>
+    </div>
+  </div>`;
+}
+
+function renderTop5(rows){
+  if(!rows||!rows.length) return '';
+  const body = rows.map(r=>`<tr>
+    <td>${esc(r.rank)}</td>
+    <td><span class="dot ${esc(r.tier)}"></span></td>
+    <td class="size">${esc(cleanSize(r.size))}</td>
+    <td class="type">${esc(r.type)}</td>
+    <td><b>${esc(r.name)}</b></td>
+    <td class="path">${esc(r.path)}</td>
+    <td>${esc(r.note)}</td>
+  </tr>`).join('');
+  return `<div class="sec"><h2>占用排行 Top 5</h2>
+    <div class="table-scroll"><table><thead><tr><th>#</th><th>级</th><th>大小</th><th>类型</th><th>项目</th><th>路径</th><th>说明</th></tr></thead>
+    <tbody>${body}</tbody></table></div></div>`;
+}
+
+function renderGreen(items){
+  if(!items||!items.length) return '';
+  const cards = items.map(it=>{
+    const procs=(it.kill_processes&&it.kill_processes.length)
+      ? `<div class="field"><div class="label">清理前需关闭</div>${it.kill_processes.map(p=>`<span class="tag">${esc(p)}</span>`).join('')}</div>`
+      : `<div class="field"><div class="label">清理前需关闭</div><span class="note">无需关闭任何进程</span></div>`;
+    const cmds=(it.commands||[]).map(cmdBlock).join('');
+    return card('green', it.name, it.size_estimate, it.path,
+      procs + `<div class="field"><div class="label">清理命令（自行确认后执行）</div>${cmds}</div>` + delBlock(it));
+  }).join('');
+  return section('🟢 可自动清理（纯缓存/临时文件，可再生）', items.length, cards, greenBatchActions(items));
+}
+
+function greenBatchActions(items){
+  if(!DELETE) return '';
+  if(!items.some(it => it.trash_paths && it.trash_paths.length)) return '';
+  return `<span class="sec-actions">
+    <button class="del-btn trash" onclick="doBatch(this,'trash')">全部移${TRASH}</button>
+    <button class="del-btn danger" onclick="doBatch(this,'rm')">全部删除</button>
+    <span class="del-status sec-status"></span>
+  </span>`;
+}
+
+function doBatch(btn, mode){
+  const secActions = btn.closest('.sec-actions');
+  const sec = btn.closest('.sec');
+  const status = secActions.querySelector('.del-status');
+  const wraps = [...sec.querySelectorAll('.item.green .del-actions')]
+    .filter(w => !w.closest('.item').classList.contains('cleaned'));
+  if(!wraps.length){ status.textContent='没有可清理的项了'; status.className='del-status sec-status'; return; }
+  const allPaths=[]; let gb=0;
+  wraps.forEach(w=>{
+    JSON.parse(decodeURIComponent(escape(atob(w.dataset.paths)))).forEach(p=>allPaths.push(p));
+    const sz=w.closest('.item').querySelector('.item-size'); if(sz) gb+=parseGB(sz.textContent);
+  });
+  const verb = mode==='rm' ? '直接删除（不可恢复）' : `移到${TRASH}（可逆，清空后释放）`;
+  const sizeStr = gb>0 ? `，约 ${gb.toFixed(1)} GB` : '';
+  if(!confirm(`确认将这组 ${wraps.length} 项缓存全部${verb}？\n共 ${allPaths.length} 个路径${sizeStr}。`)) return;
+  postAction(secActions, allPaths, mode).then(res=>{
+    if(res.ok){
+      status.textContent = mode==='rm' ? `✓ 已删除 ${wraps.length} 项` : `✓ 已移 ${wraps.length} 项到${TRASH}`;
+      status.className='del-status sec-status ok';
+      wraps.forEach(w=>{
+        const item=w.closest('.item'); item.classList.add('cleaned');
+        const badge=item.querySelector('.item-head .item-badge');
+        if(badge) badge.textContent = mode==='rm' ? '已删除' : `已移${TRASH}`;
+        const ist=w.querySelector('.del-status');
+        if(ist){ ist.textContent = mode==='rm'?'✓ 已删除':`✓ 已移到${TRASH}`; ist.className='del-status ok'; }
+        w.querySelectorAll('.del-btn.trash,.del-btn.danger').forEach(b=>b.remove());
+      });
+      secActions.querySelectorAll('.del-btn').forEach(b=>b.remove());
+    } else { status.textContent='✗ '+(res.error||'失败'); status.className='del-status sec-status err'; }
+  });
+}
+
+function delBlock(it){
+  if(!DELETE || !it.trash_paths || !it.trash_paths.length) return '';
+  const payload = btoa(unescape(encodeURIComponent(JSON.stringify(it.trash_paths))));
+  return `<div class="field del-actions" data-paths="${payload}">
+    <div class="label">在网页上直接处理（${it.trash_paths.length} 个路径）</div>
+    <div class="del-row">
+      <button class="del-btn trash" onclick="doDelete(this,'trash')">移到${TRASH}</button>
+      <button class="del-btn danger" onclick="doDelete(this,'rm')">直接删除</button>
+      <span class="del-status"></span>
+    </div>
+    <div class="del-note"><b>移到${TRASH}</b>：可逆，删错能从${FM}${TRASH}捞回，但要清空${TRASH}才真正释放空间。<b>直接删除</b>：立即释放、不可恢复。绿灯都是可再生缓存，删了会自动重建。</div>
+  </div>`;
+}
+
+function postAction(wrap, paths, mode){
+  const status = wrap.querySelector('.del-status');
+  const btns = wrap.querySelectorAll('.del-btn');
+  status.textContent = '处理中…'; status.className='del-status';
+  btns.forEach(b=>b.disabled=true);
+  return fetch(DELETE.endpoint, {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({token:DELETE.token, paths, mode})})
+    .then(r=>r.json()).then(res=>{ btns.forEach(b=>b.disabled=false); return res; })
+    .catch(e=>{ btns.forEach(b=>b.disabled=false); return {ok:false, error:'连接失败：'+e}; });
+}
+
+function doDelete(btn, mode){
+  const wrap = btn.closest('.del-actions');
+  const paths = JSON.parse(decodeURIComponent(escape(atob(wrap.dataset.paths))));
+  const verb = mode==='rm' ? '直接删除（不可恢复）' : `移到${TRASH}（可恢复）`;
+  if(!confirm(`确认${verb}以下 ${paths.length} 个路径？\n\n`+paths.join('\n'))) return;
+  postAction(wrap, paths, mode).then(res=>{
+    const status = wrap.querySelector('.del-status');
+    if(res.ok){
+      status.textContent = mode==='rm' ? '✓ 已删除，空间已释放' : `✓ 已移到${TRASH}（可恢复，清空后释放空间）`;
+      status.className='del-status ok';
+      wrap.querySelectorAll('.del-btn.trash,.del-btn.danger').forEach(b=>b.remove());
+      const item = wrap.closest('.item');
+      if(item){
+        item.classList.add('cleaned');
+        const badge = item.querySelector('.item-head .item-badge');
+        if(badge) badge.textContent = mode==='rm' ? '已删除' : `已移${TRASH}`;
+      }
+    } else { status.textContent='✗ '+(res.error||'失败'); status.className='del-status err'; }
+  });
+}
+
+function doOpen(btn){
+  const wrap = btn.closest('.del-actions');
+  const paths = JSON.parse(decodeURIComponent(escape(atob(wrap.dataset.open))));
+  postAction(wrap, paths, 'open').then(res=>{
+    const status = wrap.querySelector('.del-status');
+    if(res.ok){ status.textContent='✓ 已在'+FM+'打开，自行审查删除'; status.className='del-status ok'; }
+    else { status.textContent='✗ '+(res.error||'失败'); status.className='del-status err'; }
+  });
+}
+
+const b64 = o => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
+
+function renderYellow(items){
+  if(!items||!items.length) return '';
+  const cards = items.map(it=>card('yellow', it.name, it.size, it.path,
+    `<div class="field"><div class="label">内容画像</div>${esc(it.content_profile)}</div>
+     <div class="field"><div class="label">为什么需要人工判断</div>${esc(it.why_manual)}</div>
+     <div class="field"><div class="label">处置路径</div>${esc(it.disposal)}</div>
+     <div class="risk">⚠️ ${esc(it.risk)}</div>` + yellowActions(it))).join('');
+  return section('🟡 需你参与的手动清理（含用户数据）', items.length, cards);
+}
+
+function yellowActions(it){
+  if(!DELETE) return '';
+  const hasTrash = it.trash_paths && it.trash_paths.length;
+  const trashBtn = hasTrash
+    ? `<button class="del-btn trash" onclick="doDelete(this,'trash')">移到${TRASH}（仅安全部分）</button>` : '';
+  const trashNote = hasTrash
+    ? `<b>移到${TRASH}（仅安全部分）</b>：只移这一项核实过可安全清理的子目录，可逆、需清空${TRASH}才释放空间。` : '';
+  const openNote = it.open_note ? esc(it.open_note) : '';
+  return `<div class="field del-actions" data-paths="${hasTrash?b64(it.trash_paths):''}" data-open="${b64([it.path])}">
+    <div class="label">在网页上处理</div>
+    <div class="del-row">
+      <button class="del-btn open" onclick="doOpen(this)">在${FM}里打开</button>
+      ${trashBtn}
+      <span class="del-status"></span>
+    </div>
+    <div class="del-note"><b>在${FM}里打开</b>：只打开文件夹供你自己查看，不删任何东西。${trashNote}${openNote?'<br>'+openNote:''}</div>
+  </div>`;
+}
+
+function renderRed(items){
+  if(!items||!items.length) return '';
+  const cards = items.map(it=>card('red', it.name, it.size||'', it.path,
+    `<div class="field"><div class="label">为什么不建议手删</div>${esc(it.why_keep)}</div>
+     <div class="field"><div class="label">卸载 / 释放建议</div>${esc(it.indirect_release)}</div>
+     ${it.auto_reclaim?`<div class="field"><div class="label">是否自动回收</div>${esc(it.auto_reclaim)}</div>`:''}` + redActions(it))).join('');
+  return section('🔴 谨慎清理（建议走正规卸载，别手动拖删）', items.length, cards);
+}
+
+function redActions(it){
+  if(!DELETE || !it.app_paths || !it.app_paths.length) return '';
+  return `<div class="field del-actions" data-open="${b64(it.app_paths)}">
+    <div class="label">在网页上处理</div>
+    <div class="del-row">
+      <button class="del-btn open" onclick="doOpen(this)">在${FM}里打开（去卸载）</button>
+      <span class="del-status"></span>
+    </div>
+    <div class="del-note"><b>在${FM}里打开</b>：定位到该应用路径，你可以用包管理器卸载（apt/dnf/pacman -R）或手动删除。应用可能存在依赖关系，建议优先用包管理器处理，本页不代删。</div>
+  </div>`;
+}
+
+function card(tier,name,size,path,inner){
+  return `<div class="item ${tier}">
+    <div class="item-head" onclick="this.parentNode.classList.toggle('open')">
+      <span class="dot ${tier}"></span>
+      <span class="item-name">${esc(name)}</span>
+      <span class="item-badge"></span>
+      ${size?`<span class="item-size">${esc(cleanSize(size))}</span>`:''}
+      <span class="chev">▶</span>
+    </div>
+    <div class="item-body">
+      <div class="item-path">${esc(path)}</div>
+      ${inner}
+    </div></div>`;
+}
+function section(title,count,inner,actions){
+  return `<div class="sec"><h2>${esc(title)} <span class="count">${count} 项</span>${actions||''}</h2>${inner}</div>`;
+}
+
+const sumList=a=>(a&&a.length)?`<ul>${a.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'';
+
+function renderPriority(sm){
+  if(!sm || (!sm.priority && !sm.overview)) return '';
+  const intro = sm.overview?`<p class="lead">${esc(sm.overview)}</p>`:'';
+  const body = sm.priority?(Array.isArray(sm.priority)?sumList(sm.priority):`<p>${esc(sm.priority)}</p>`):'';
+  return `<div class="sec"><h2>执行建议</h2><div class="summary">${intro}${body}</div></div>`;
+}
+
+function renderLongTerm(sm){
+  if(!sm || !sm.long_term || !sm.long_term.length) return '';
+  return `<div class="sec"><h2>长期优化建议</h2><div class="summary">${sumList(sm.long_term)}</div></div>`;
+}
+
+function renderDenied(){
+  if(!DATA.denied||!DATA.denied.length) return '';
+  return `<div class="denied"><b>以下目录权限不足未能读取，可能遗漏体量：</b><br>${DATA.denied.map(esc).join('<br>')}</div>`;
+}
+
+const app=document.getElementById('app');
+app.innerHTML = renderSystem(DATA.system, DATA.summary)
+  + renderTop5(DATA.top5)
+  + renderPriority(DATA.summary)
+  + renderGreen(DATA.green)
+  + renderYellow(DATA.yellow)
+  + renderRed(DATA.red)
+  + renderDenied()
+  + renderLongTerm(DATA.summary);
+
+document.addEventListener('click', e=>{
+  const b=e.target.closest('.copy'); if(!b) return;
+  e.stopPropagation();
+  const text=decodeURIComponent(escape(atob(b.dataset.cmd)));
+  navigator.clipboard.writeText(text).then(()=>{
+    b.textContent='已复制'; b.classList.add('done');
+    setTimeout(()=>{b.textContent='复制';b.classList.remove('done');},1500);
+  });
+});
+</script>
+</body>
+</html>

@@ -1,83 +1,90 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { detectEditorState } from "./detect.ts";
 
-const RULE = "─".repeat(60);
+const TOP = `╭${"─".repeat(60)}╮`;
+const BOTTOM = `╰${"─".repeat(60)}╯`;
+const BLANK = `│${" ".repeat(60)}│`;
 
-/** 实测的空 footer（末尾两行），见设计文档「技术依据 F」。 */
-const FOOTER = [
-	"🤖 01/grok-4.6-latest • 🧠 high • 🔢 ↑306k ↓7k • 📖 1.1m • 🎯 99.7% • 💸 $0.0000 • 📊 ▓░░░░░░░░░ 71k/1m (7%)",
-	"📈 (+0,-0) • ⏳ 94h",
-];
+/** 实测的 footer（圆角框之后的一行）。 */
+const FOOTER = "✦ 01/deepseek-v4.1-flash • 🧠 max • 206.7k/1M (21%) • ⚡200 tok/s • MCP 0/1";
+
+/** pretty-tui 左右各留约 12% 的缩进。 */
+const INDENT = " ".repeat(21);
 
 function screen(...body: string[]): string {
-	return [...body, ...FOOTER].join("\n");
+	return [...body, FOOTER].map((line) => (line === "" ? "" : INDENT + line)).join("\n");
 }
 
-test("空输入框 → empty（4 个 pane 的实测形态）", () => {
-	assert.equal(detectEditorState(screen("是的，之前被我们盖住了。", "", RULE, "", RULE)), "empty");
+test("空输入框 → empty", () => {
+	assert.equal(detectEditorState(screen("是的，之前被我们盖住了。", "", TOP, BLANK, BOTTOM)), "empty");
 });
 
 test("只有空白的输入框 → empty", () => {
-	assert.equal(detectEditorState(screen(RULE, "   ", RULE)), "empty");
+	assert.equal(detectEditorState(screen(TOP, `│${" ".repeat(60)}│`, BOTTOM)), "empty");
 });
 
 test("单行草稿 → occupied", () => {
-	assert.equal(detectEditorState(screen("上一段回答", "", RULE, "帮我看看这个", RULE)), "occupied");
+	const draft = `│${"帮我看看这个".padEnd(60, " ")}│`;
+	assert.equal(detectEditorState(screen("上一段回答", "", TOP, draft, BOTTOM)), "occupied");
 });
 
 test("多行草稿 → occupied", () => {
-	assert.equal(detectEditorState(screen(RULE, "第一行草稿", "第二行草稿", RULE)), "occupied");
+	const first = `│${"第一行草稿".padEnd(60, " ")}│`;
+	const second = `│${"第二行草稿".padEnd(60, " ")}│`;
+	assert.equal(detectEditorState(screen(TOP, first, second, BOTTOM)), "occupied");
 });
 
-test("草稿里含整行长横线，仍判 occupied", () => {
-	// 从下往上找会先把「草稿继续」上方的横线当上边线，但结论不受影响。
+test("对话正文里的横线和圆角框不能当成输入框", () => {
+	const decoy = `── ✓ Completed in 33s ${"─".repeat(30)} [Copy] ──`;
+	assert.equal(detectEditorState(screen("对话上半", decoy, "对话下半", TOP, BLANK, BOTTOM)), "empty");
+});
+
+test("找不到圆角框 → unknown", () => {
+	assert.equal(detectEditorState(screen("只有对话", "没有边框")), "unknown");
+});
+
+test("底边离屏幕底部过远 → unknown", () => {
 	assert.equal(
-		detectEditorState(screen(RULE, "草稿开始", "─".repeat(40), "草稿继续", RULE)),
-		"occupied",
+		detectEditorState(screen(TOP, BLANK, BOTTOM, "a", "b", "c", "d", "e", "f", "g")),
+		"unknown",
 	);
 });
 
-test("对话正文里的长分隔线不能当成边线", () => {
-	assert.equal(detectEditorState(screen("对话上半", RULE, "对话下半", RULE, "", RULE)), "empty");
+test("只有顶边没有底边 → unknown", () => {
+	assert.equal(detectEditorState(screen(TOP, BLANK, FOOTER)), "unknown");
 });
 
-test("横线不足两条 → unknown", () => {
-	assert.equal(detectEditorState(screen("只有对话", "没有边线")), "unknown");
-});
-
-test("下边线离屏幕底部过远 → unknown", () => {
-	assert.equal(detectEditorState(screen(RULE, "", RULE, "a", "b", "c", "d", "e", "f")), "unknown");
-});
-
-test("补全弹窗打开时的真实草稿（w5:p7 实测形态）→ occupied", () => {
-	// 下边线之后有 4 行：补全项 + 2 行 footer + 1 行额外状态栏。
-	const real = [
-		"",
-		RULE,
-		"/wechat",
-		RULE,
-		"→ wechat      [u:npm:pi-wechat-assistant] 微信桥接管理：login | start | stop | status | config | logout | autostart | remotetools",
-		"🤖 01/deepseek-v4.1-flash • 🧠 high • 🔢 ↑0 ↓0 • 💸 $0.0000 • 📊 ░░░░░░░░░░ 0/1m (0%) • 🧩 0%",
-		"🌿 main • 🔖 8ea6e31 • 🔀 +0 ±2 ?1 • 📈 (+73,-4) • ↕️ ↑2 ↓0 • ⏳ 0m",
-		"[微信 ⏸ 未连接]",
-	].join("\n");
-	assert.equal(detectEditorState(real), "occupied");
-});
-
-test("尾部行数在上限内 → empty", () => {
-	// 下边线之后 4 + 2 = 6 行，正好在上限上。
-	assert.equal(detectEditorState(screen(RULE, "", RULE, "a", "b", "c", "d")), "empty");
-});
-
-test("尾部行数刚超上限 → unknown", () => {
-	assert.equal(detectEditorState(screen(RULE, "", RULE, "a", "b", "c", "d", "e")), "unknown");
+test("框不完整（内容行缺竖线）→ unknown", () => {
+	assert.equal(detectEditorState(screen(TOP, "普通文本", BOTTOM)), "unknown");
 });
 
 test("末尾空行不影响判定", () => {
-	assert.equal(detectEditorState(`${screen("对话", "", RULE, "", RULE)}\n\n  \n`), "empty");
+	assert.equal(detectEditorState(`${screen(TOP, BLANK, BOTTOM)}\n\n  \n`), "empty");
 });
 
 test("空屏幕 → unknown", () => {
 	assert.equal(detectEditorState(""), "unknown");
+});
+
+/** 2026-10-30 从真实窗口截下的屏幕，圆角框带左右缩进。 */
+function fixture(name: string): string {
+	const here = dirname(fileURLToPath(import.meta.url));
+	return readFileSync(join(here, "fixtures", name), "utf8");
+}
+
+test("真实屏幕：空输入框 → empty", () => {
+	assert.equal(detectEditorState(fixture("empty-editor.txt")), "empty");
+});
+
+test("真实屏幕：输入框里有草稿 → occupied", () => {
+	assert.equal(detectEditorState(fixture("draft-editor.txt")), "occupied");
+});
+
+test("真实屏幕：上方有更新提示框 → empty", () => {
+	// 提示框用整行 ─ 画边，不能被误认成输入框。
+	assert.equal(detectEditorState(fixture("update-notice.txt")), "empty");
 });

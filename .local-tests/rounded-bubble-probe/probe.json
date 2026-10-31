@@ -1,0 +1,16 @@
+{
+  "pid": 6017,
+  "image_ids": [
+    1024068,
+    1024069
+  ],
+  "cell_reply": "'\\x1b[6;40;18t'",
+  "kitty_query_reply": "'\\x1b_Gi=1024070;OK\\x1b\\\\'",
+  "cell_width": 18,
+  "cell_height": 40,
+  "cell_size_measured": true,
+  "columns": 60,
+  "rows": 5,
+  "status": "displayed; visual confirmation required",
+  "scroll_test_requested": true
+}

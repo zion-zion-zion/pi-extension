@@ -1,0 +1,65 @@
+onboarding = false
+
+[ui]
+# Kimi 风格布局：侧栏稍宽、窗格之间留白、减少硬分隔线。
+sidebar_width = 28
+sidebar_min_width = 24
+sidebar_max_width = 36
+pane_borders = "off"
+pane_outer_borders = false
+pane_gaps = true
+
+# 外层终端（Ghostty）窗口 / tab 标题。
+# {terminal_title} = 当前聚焦 pane 的标题；pi 会把它写成 "π - <会话名> - <cwd>"。
+# 不再拼 {workspace}：侧边栏/标题栏已经在最前面用粗体显示 space 名了。
+window_title = "{terminal_title}"
+
+[ui.sidebar.agents]
+# 每个 Agent 条目之间留一行，降低列表的拥挤感。
+row_gap = 1
+# 保持两行：第 2 行 = agent 名 + pi 会话名。
+# $pi_session 由 extensions/herdr-session-title.ts 上报（pane token）。
+# 不换行；超宽由 herdr 自己截断。
+rows = [["state_icon", "machine", "workspace", "tab"], ["agent", "$pi_session"]]
+
+[theme]
+name = "tokyo-night-day"
+
+auto_switch = false
+
+# Kimi 风格：暖灰侧栏、白色主区，统一文字与选中态。
+[theme.custom]
+sidebar_bg = "#f5f3f0"
+panel_bg = "#ffffff"
+active_row_bg = "#ebe8e3"
+selection_bg = "#e3dfd9"
+text = "#37352f"
+accent = "#6b5dd3"
+
+[terminal]
+default_shell = "/opt/homebrew/bin/fish"
+
+# Home/End/PgUp/PgDn/numpad are remapped by Ghostty onto these chords.
+# See ~/.config/ghostty/config.
+[keys]
+previous_workspace = "ctrl+alt+left"
+next_workspace = "ctrl+alt+right"
+previous_agent = "ctrl+alt+up"
+next_agent = "ctrl+alt+down"
+previous_tab = ["prefix+p", "f14"]
+next_tab = ["prefix+n", "f15"]
+switch_tab = ["prefix+1..9", "ctrl+alt+1..9"]
+
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "local.pi-session-delete.delete"
+description = "delete focused Pi session"
+
+# 把剪贴板内容粘进当前窗格，绕开终端的 Cmd+V。
+# 堡垒机会话里 Cmd+V 会出问题（会话静默），这个键直接写 pty，不依赖终端的粘贴通道。
+[[keys.command]]
+key = "ctrl+alt+v"
+type = "shell"
+command = "PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin /Users/jiezhou/.local/bin/nsf-paste"
+description = "粘贴剪贴板到当前窗格（替代 Cmd+V）"

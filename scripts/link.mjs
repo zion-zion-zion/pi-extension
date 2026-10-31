@@ -39,6 +39,7 @@ const ITEMS = [
 	{ src: "extensions/scroll-to-last-prompt.ts", dest: join(EXT_DIR, "scroll-to-last-prompt.ts") },
 	{ src: "extensions/model-filter.ts", dest: join(EXT_DIR, "model-filter.ts") },
 	{ src: "extensions/model-label", dest: join(EXT_DIR, "model-label") },
+	{ src: "extensions/pretty-tui", dest: join(EXT_DIR, "pretty-tui") },
 	{ src: "extensions/restart.ts", dest: join(EXT_DIR, "restart.ts") },
 	{ src: "extensions/herdr-session-title.ts", dest: join(EXT_DIR, "herdr-session-title.ts") },
 	{ src: "extensions/herdr-yazi-preview.ts", dest: join(EXT_DIR, "herdr-yazi-preview.ts") },
@@ -56,6 +57,7 @@ const ITEMS = [
 	// 否则 rename 会把软链替换成真实文件、软链静默失效）
 	{ src: "extensions/pi-footer.json", dest: join(EXT_DIR, "pi-footer.json") },
 	{ src: "extensions/pi-context-view.json", dest: join(EXT_DIR, "pi-context-view.json") },
+	{ src: "extensions/pretty-tui.json", dest: join(EXT_DIR, "pretty-tui.json") },
 	// skills
 	{ src: "skills/read-terminal", dest: join(SKILLS_DIR, "read-terminal") },
 ];

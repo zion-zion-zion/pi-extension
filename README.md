@@ -21,6 +21,7 @@
 | [`extensions/model-filter.ts`](extensions/model-filter.ts) | 隐藏内置 provider 里用不到的历史模型（默认过滤 `openai-codex` 的 gpt-5.3~5.5），在 `/model` 与 `--list-models` 生效 |
 | [`extensions/model-label/`](extensions/model-label/) | footer 上的模型名：默认用 `models.json` 里的 name 并去掉来源后缀，想改某个模型就在 `index.ts` 顶部的 `ALIASES` 加一行 `"provider/id": "显示名"` |
 | [`extensions/pi-footer.json`](extensions/pi-footer.json) | pi 底部状态栏（footer）配置：布局、图标、widget 等 |
+| [`extensions/pretty-tui/`](extensions/pretty-tui/) | 本地定制版 pi-pretty-tui（基于上游 v0.2.9）：用户气泡 PNG 底色、对话区/输入框/footer 统一 12% 边距、单击用户气泡复制原文。`transcriptMarginRatio` 在 [`extensions/pretty-tui.json`](extensions/pretty-tui.json) |
 | [`extensions/pi-context-view.json`](extensions/pi-context-view.json) | 「Context View」颜色主题配置（各消息类型的颜色） |
 
 ### 配套：Herdr 侧边栏显示 pi 会话名
@@ -82,6 +83,19 @@ node scripts/link.mjs --fix    # 把「拷贝一致 / 缺失」收敛成软链�
 > 放置路径：全局 `~/.pi/agent/extensions/`，项目级 `.pi/extensions/`（需先信任项目）。快速测试可用 `pi -e ./xxx.ts`。Skill 路径：全局 `~/.agents/skills/` 或 `~/.pi/agent/skills/`。
 >
 > 安全提示：扩展和 skill 都以你的完整权限运行，只从可信来源安装。
+
+### 在新机器上对齐本机习惯（含 pretty-tui 定制版）
+
+`extensions/pretty-tui/` 是从上游 v0.2.9 拷来的**定制版**，所以新机器上**不要再装 `npm:pi-pretty-tui`** —— 两套会同时往 pi 的原型上打补丁。
+
+```bash
+pi install npm:@zionzionzion/pi-extensions   # 已包含 pretty-tui 定制版
+cp extensions/pretty-tui.json ~/.pi/agent/pretty-tui.json   # 可选：要 mode: clean 等本机设置时
+```
+
+装完检查 `~/.pi/agent/settings.json` 的 `packages` 里没有 `pi-pretty-tui`，然后重启 pi。边距默认就是 `0.12`，所以即使不拷 `pretty-tui.json` 也是同样的版面；那份配置只是把 `mode: clean` 和 `enabled` 显式写下来。
+
+走软链路线（开发机布局）时，`node scripts/link.mjs --fix` 会一并建好 `pretty-tui` 和 `pretty-tui.json` 两条软链。
 
 ## 发布
 

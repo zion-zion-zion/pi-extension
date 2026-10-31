@@ -15,6 +15,8 @@
     "extensions/*.ts",
     "extensions/codex-usage",
     "extensions/magpie-quota",
+    "extensions/model-label",
+    "extensions/pretty-tui",
     "extensions/reload-all",
     "skills",
     "README.md"
@@ -31,6 +33,8 @@
       "extensions/*.ts",
       "extensions/codex-usage/index.ts",
       "extensions/magpie-quota/index.ts",
+      "extensions/model-label/index.ts",
+      "extensions/pretty-tui/index.ts",
       "extensions/reload-all/index.ts"
     ],
     "skills": [

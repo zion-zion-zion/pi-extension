@@ -1,0 +1,12 @@
+{
+  "name": "pretty-tui",
+  "private": true,
+  "type": "module",
+  "description": "Vendored pi-pretty-tui 0.2.9 with local bubble, margin and copy patches",
+  "scripts": {
+    "test": "node --experimental-strip-types --test ./*.test.ts"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
